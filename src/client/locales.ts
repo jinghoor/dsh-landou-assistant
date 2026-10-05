@@ -40,7 +40,7 @@ export const en: Record<LandouLocaleKey, string> = {
   signedInAs: 'Signed in as {name}',
   signedInHint: 'This device stays signed in until you sign out. The access token is kept by the local Blue Bean service, not in this page.',
   signOut: 'Sign out',
-  gateHint: 'While signed out the sidebar keeps the default brand. After signing in it shows the Blue Bean brand.',
+  gateHint: 'The sidebar shows the Blue Bean brand whether or not you are signed in. Signing in unlocks this page’s settings and features.',
   requiredFields: 'Fill in every required field',
 }
 
@@ -69,6 +69,6 @@ export const zh: Record<LandouLocaleKey, string> = {
   signedInAs: '已登录:{name}',
   signedInHint: '本机在退出登录前保持登录状态。访问令牌由本机蓝豆服务保存,不在这个页面里。',
   signOut: '退出登录',
-  gateHint: '未登录时侧栏保持默认品牌;登录后会显示蓝豆品牌。',
+  gateHint: '侧栏品牌名与登录无关,装上插件即可见。登录用于解锁本页的设置与功能。',
   requiredFields: '请填写所有必填项',
 }

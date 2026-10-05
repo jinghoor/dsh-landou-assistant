@@ -37,8 +37,6 @@ export interface LandouSettingsInjected {
   register: (input: RegisterInput) => Promise<CallResult<SessionView>>
   sendEmailCode: (email: string, purpose: 'register' | 'reset_password') => Promise<CallResult<EmailCodeState>>
   logout: () => Promise<CallResult<SessionView>>
-  /** 登录状态变化后通知插件重新同步侧栏品牌。 */
-  notifySessionChanged: () => void
 }
 
 /** 渲染器绑定的组合 props。 */
@@ -100,7 +98,7 @@ function Consent(props: { id: string; label: string; checked: boolean; onChange:
  * @param props - 由设置外壳合成的 slot props。
  * @returns 登录/注册界面,或已登录的账号页。
  */
-export function LandouSettingsSection({ t, getSession, login, register, sendEmailCode, logout, notifySessionChanged }: LandouSettingsSectionProps) {
+export function LandouSettingsSection({ t, getSession, login, register, sendEmailCode, logout }: LandouSettingsSectionProps) {
   const [session, setSession] = useState<SessionView>()
   const [loading, setLoading] = useState(true)
   const [mode, setMode] = useState<'signIn' | 'signUp'>('signIn')
@@ -139,13 +137,12 @@ export function LandouSettingsSection({ t, getSession, login, register, sendEmai
     return () => { clearInterval(timer) }
   }, [cooldown])
 
-  /** 登录/注册成功后统一收尾:写回会话并通知插件同步侧栏品牌。 */
+  /** 登录/注册成功后统一收尾。 */
   const accept = useCallback((next: SessionView) => {
     setSession(next)
     setPassword('')
     setVerificationCode('')
-    notifySessionChanged()
-  }, [notifySessionChanged])
+  }, [])
 
   const submit = useCallback(async () => {
     setError(undefined)

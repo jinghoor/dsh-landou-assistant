@@ -1,16 +1,18 @@
 /**
  * 蓝豆助手 —— 浏览器半边。
  *
- * 三处贡献,其中一处受登录状态约束:
+ * 三处贡献:
  *
- *  1. `sidebar.brand.name` —— **仅在已登录时占用**,把官方品牌名换成
- *     「蓝豆助手 by DeepSeek Harness」。未登录时完全不注册,侧栏保持官方原样。
- *     这就是"登录后才能使用本插件"的实现点:登出即撤掉占用,官方品牌自然回归。
- *  2. `settings.section` —— 设置面板里的「蓝豆助手」页。**始终注册**,
- *     否则未登录的用户找不到登录入口。未登录显示注册/登录表单,已登录显示账号页。
+ *  1. `sidebar.brand.name` —— 把官方品牌名换成「蓝豆助手 by DeepSeek Harness」。
+ *     **与登录状态无关**:品牌是插件的存在标识,不是受登录约束的功能。
+ *     曾经把它跟登录绑在一起(登录后才占用),后果是未登录的用户完全看不到
+ *     插件存在过,会以为插件坏了 —— 实测就是这么发生的。
+ *  2. `settings.section` —— 设置面板里的「蓝豆助手」页。未登录显示注册/登录表单,
+ *     已登录显示账号页。**这是登录门控的落点**:后续需要账号的功能都放这一页里,
+ *     或者放在由它派生的贡献里。
  *  3. 本地化字典。
  *
- * 登录状态由宿主半边判定(`GET /landou-assistant/session`),浏览器只拿到
+ * 会话判定在宿主半边(`GET /landou-assistant/session`),浏览器只拿到
  * "是否已登录 + 显示名"——**访问令牌永远不进这个进程**。
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
@@ -40,67 +42,16 @@ export function apply(ctx: ClientContext): void {
   const t = ctx.locale.bind(NS)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'landou-assistant: dictionaries')
 
-  // ── 登录状态:插件是否可用的唯一判据 ──────────────────────────────
-  let authenticated = false
-  let brandDisposer: (() => void) | undefined
-
-  /**
-   * 让侧栏品牌的注册与登录状态保持一致。
-   *
-   * `slots.inject` 返回 disposer,所以登出时能真正撤掉那个占用 ——
-   * 官方品牌插件从未被禁用,我们的注册消失后它自然重新成为唯一占用者。
-   */
-  const syncBrand = (): void => {
-    if (authenticated && brandDisposer === undefined) {
-      brandDisposer = ctx.slots.inject('sidebar.brand.name', function* () {
-        yield ctx.slots.register({ name: 'sidebar.brand.name', priority: -1 }, LandouBrandName)
-      })
-    } else if (!authenticated && brandDisposer !== undefined) {
-      brandDisposer()
-      brandDisposer = undefined
-    }
-  }
-
-  /**
-   * 向宿主问一次会话并同步品牌。
-   * @returns 是否拿到了**明确答复**。false 表示请求本身失败(宿主未就绪、网络抖动),
-   *   此时**不能**据此认定用户未登录 —— 那会让已登录的用户看不到品牌。
-   */
-  const refreshSession = async (): Promise<boolean> => {
-    const result = await getSession()
-    if (!result.ok) return false
-    const next = result.value.authenticated
-    if (next !== authenticated) {
-      authenticated = next
-      syncBrand()
-    }
-    return true
-  }
-
-  // 启动竞态:客户端脚本可能比宿主路由先就绪,一次失败就放弃会让已登录用户
-  // 看不到品牌。重试到拿到明确答复为止,仍失败则保持未登录(下一次复查会纠正)。
-  const STARTUP_RETRY_MS = 1_500
-  const STARTUP_ATTEMPTS = 6
-  void (async () => {
-    for (let attempt = 0; attempt < STARTUP_ATTEMPTS; attempt += 1) {
-      if (await refreshSession()) return
-      await new Promise((resolve) => { setTimeout(resolve, STARTUP_RETRY_MS) })
-    }
-  })()
-
-  // 会话可能在别处变化 —— 在设置页登录(已由 notifySessionChanged 覆盖)、
-  // 宿主重启、或用户在别处退出。窗口重新可见/获得焦点时复查一次,让状态自愈。
-  if (typeof document !== 'undefined') {
-    const recheck = (): void => {
-      if (document.visibilityState === 'visible') void refreshSession()
-    }
-    document.addEventListener('visibilitychange', recheck)
-    window.addEventListener('focus', recheck)
-    ctx.effect(() => () => {
-      document.removeEventListener('visibilitychange', recheck)
-      window.removeEventListener('focus', recheck)
-    }, 'landou-assistant: session re-check listeners')
-  }
+  // ── 侧栏品牌名:无条件占用 ────────────────────────────────────────
+  // 遮蔽机制:官方品牌插件 (ui-brand-official) 以默认优先级 0 占用同一 slot。
+  // slot 的占用冲突**只在相同优先级上才抛错**,不同优先级是遮蔽关系,且
+  // **数值最低者渲染** (`packages/client/ui-slots/src/index.ts`) ——
+  // 所以 -1 稳定压过官方品牌名,而官方插件本身不报错、无需禁用。
+  //
+  // 只动 brand.name,不碰 brand.mark —— 鲸鱼图标保持官方原样。
+  ctx.slots.inject('sidebar.brand.name', function* () {
+    yield ctx.slots.register({ name: 'sidebar.brand.name', priority: -1 }, LandouBrandName)
+  })
 
   // ── 设置页导航项 ──────────────────────────────────────────────────
   // `settings.section` 是列表 slot,导航身份由注册选项给出:
@@ -109,22 +60,12 @@ export function apply(ctx: ClientContext): void {
   //            plugins 15 / agent-presets 20,这里排最后
   //   label —— 注册方自行本地化的显示文本
   // shell 没有自己的文案,全部来自注册方。
-  //
-  // 这一项**不受登录状态约束**:未登录的用户必须能在这里找到登录入口。
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'landou-assistant',
     order: 30,
     label: () => t('nav'),
     locale: NS,
-    inject: () => ({
-      getSession,
-      login,
-      register,
-      sendEmailCode,
-      logout,
-      // 页面里登录/登出完成后回调这里,让侧栏品牌立刻跟着变。
-      notifySessionChanged: () => { void refreshSession() },
-    }),
+    inject: () => ({ getSession, login, register, sendEmailCode, logout }),
   }, LandouSettingsSection))
 }
