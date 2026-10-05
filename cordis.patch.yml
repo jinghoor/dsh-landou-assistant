@@ -1,0 +1,7 @@
+# 蓝豆助手 bundle 层:把本插件的宿主半边插入 Loader 树。
+#
+# 客户端半边不在这里声明 —— client-modules 扫描已启用的 Loader entry,
+# 发现包声明了 dsh.client 就自动把 lib/client.js 投递给浏览器。
+- insert:
+    - id: landou-assistant
+      name: dsh-landou-assistant

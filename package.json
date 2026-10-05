@@ -1,0 +1,52 @@
+{
+  "name": "dsh-landou-assistant",
+  "version": "1.0.0",
+  "description": "蓝豆助手 — DeepSeek Harness Desktop 插件：自定义侧栏品牌名，并在设置面板提供专属设置页",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "desktop",
+    "landou"
+  ],
+  "license": "MIT",
+  "author": "jinghoor",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jinghoor/dsh-landou-assistant.git"
+  },
+  "homepage": "https://github.com/jinghoor/dsh-landou-assistant#readme",
+  "bugs": {
+    "url": "https://github.com/jinghoor/dsh-landou-assistant/issues"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/",
+    "cordis.patch.yml"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "watch": "tsdown --watch"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  }
+}

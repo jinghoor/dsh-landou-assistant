@@ -1,0 +1,12 @@
+# 本仓库刻意**不**忽略 lib/ —— 见下。
+#
+# 原因:用户通过 `github:jinghoor/dsh-landou-assistant` 安装时,pnpm 会把仓库
+# 打包成依赖。DSH 的插件管理器对构建脚本(allowBuilds)有审批门槛,所以
+# 安装路径上刻意**不提供 prepare 脚本** —— lib/ 作为预构建产物随仓库分发,
+# 用户装完即可用,不需要任何工具链,也不需要批准脚本执行。
+#
+# 改完 src/ 后重新 `pnpm build` 并把 lib/ 一起提交。
+
+node_modules/
+*.log
+.DS_Store
