@@ -93,6 +93,7 @@ git add lib && git commit -m "build: ..."
 │   └── client/
 │       ├── index.ts      浏览器半边 —— 注册两处贡献
 │       ├── locales.ts    中英文案
+│       ├── LandouMark.tsx             豆形标记(内联 SVG)
 │       ├── LandouBrandName.tsx        侧栏品牌名组件
 │       └── LandouSettingsSection.tsx  设置页组件
 └── lib/                  预构建产物(随仓库提交)
@@ -104,10 +105,25 @@ git add lib && git commit -m "build: ..."
 |---|---|
 | 品牌名文案 | `src/client/LandouBrandName.tsx` |
 | 遮蔽优先级 | `src/client/index.ts` 的 `priority` |
-| 连图标一起换 | 同时注册 `sidebar.brand.mark`(owner props 是 `{size: number}`) |
+| 连侧栏图标一起换 | 同时注册 `sidebar.brand.mark`(owner props 是 `{size: number}`) |
+| 豆形标记形状 | `src/client/LandouMark.tsx` |
 | 设置页导航位置 | `src/client/index.ts` 注册选项的 `order` |
 | 导航项文案 | `src/client/locales.ts` 的 `nav` |
 | 占位页内容 | `src/client/LandouSettingsSection.tsx` |
+
+### 宽度退化
+
+侧栏品牌名的空间很紧:实测侧栏 280px 时,宿主 `.brand` 只有 252px,
+官方鲸鱼图标 + 间隙占掉 32px,留给品牌名的是 219px,而文案要 213px —— **只剩 6px 余量**。
+父级链上是 `overflow: hidden`,不处理的话窄栏会**硬切**字符。
+
+所以组件的退化顺序是显式声明的:
+
+1. 「蓝豆助手」`flex-shrink: 0` —— 永不压缩
+2. 「by DeepSeek Harness」`flex-shrink: 1` + `min-width: 0` + `text-overflow: ellipsis`
+   —— 先被截短,窄栏下呈现为「蓝豆助手 by DeepS…」而不是切掉半个字
+
+改文案时留意这个预算。
 
 ---
 
@@ -175,11 +191,61 @@ type-only 导入会被完全擦除。
 
 ---
 
+## 设置项导航图标:为什么插件给不了
+
+设置面板左栏每个分区的图标**由外壳按分区 id 硬编码**,插件注入不了。
+这不是偷懒,是当前 DSH 结构决定的 —— 三层原因,逐层收紧:
+
+**一、图标不是 slot。** 外壳直接渲染一个纯函数的结果:
+
+```tsx
+// packages/client/ui-settings-general/src/client/SettingsRoot.tsx
+function navIcon(id: string) {
+  if (id === 'account') return <IconUserOutlineMedium ... />
+  if (id === 'models')  return <IconDataOutlineMedium ... />
+  // 认不出的 id 走兜底齿轮 —— 「通用设置」也走这里
+  return <IconSettingsOutlineMedium className={css.navIcon} size={16} />
+}
+```
+
+**二、注册选项传不进来。** 想给注册选项加个 `icon` 字段也做不到 ——
+slot 核心在入队时会**重建** options 对象,只保留它认识的字段:
+
+```ts
+options: {
+  ...(options.id !== undefined ? { id: options.id } : {}),
+  ...(options.order !== undefined ? { order: options.order } : {}),
+  ...(options.label !== undefined ? { label: options.label } : {}),
+  ...(options.priority !== undefined ? { priority: options.priority } : {}),
+},
+```
+
+未知字段被丢弃,所以插件无法"偷渡"图标过去。
+
+**三、就算硬塞进去也是错的。** 设置分区列表是通过注入的 observable 投影给外壳的,
+而 `packages/client/AGENTS.md` 明确规定:
+
+> UI domains share JSON-compatible data and callbacks. Owner props, injected values,
+> store state, and provide contributions use these values.
+> **Route ReactNode content through a slot; do not add ReactNode-valued owner props or injected members.**
+
+**结论:这不是本插件能修的东西,而是 DSH 上游缺的一个扩展点。** 正确的上游改法是
+在 `ui-settings` 的 slots 契约里声明一个 keyed slot(例如 `settings.section.icon`,
+按分区 id 派发),由 `ui-settings-general` 声明并渲染,`navIcon(id)` 退为 fallback。
+
+**本插件刻意不做本地补丁版的图标**,理由是它会**破坏一致性**:
+补丁只存在于你自己改过的 DSH 里,用户从 GitHub 装这个插件时他们的 DSH 没有那个 slot ——
+图标只对你有、对用户没有。那正好违背这个插件存在的意义。
+
+作为替代,品牌视觉落在**设置页内部**(标题旁的豆形标记),这对未经修改的 DSH 同样成立。
+
+---
+
 ## 已知限制
 
 - 只改**侧栏品牌名**。标题栏、欢迎页、About 面板里的产品名是 Electron 壳或别的包的字面量,
   不在 slot 体系里。
-- 设置页的**图标**由设置外壳按分区 id 硬编码,插件无法自定义,当前走兜底图标。
+- 设置项**导航图标**无法自定义,原因见上一节。
 - 设置页目前是**占位**,没有任何写入行为。
 - **不发布到 npm**,仅通过 Git 安装。
 
