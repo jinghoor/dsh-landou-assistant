@@ -61,16 +61,46 @@ export function apply(ctx: ClientContext): void {
     }
   }
 
-  /** 向宿主问一次会话并同步品牌。设置页登录/登出后也调这里。 */
-  const refreshSession = async (): Promise<void> => {
+  /**
+   * 向宿主问一次会话并同步品牌。
+   * @returns 是否拿到了**明确答复**。false 表示请求本身失败(宿主未就绪、网络抖动),
+   *   此时**不能**据此认定用户未登录 —— 那会让已登录的用户看不到品牌。
+   */
+  const refreshSession = async (): Promise<boolean> => {
     const result = await getSession()
-    const next = result.ok && result.value.authenticated
-    if (next === authenticated) return
-    authenticated = next
-    syncBrand()
+    if (!result.ok) return false
+    const next = result.value.authenticated
+    if (next !== authenticated) {
+      authenticated = next
+      syncBrand()
+    }
+    return true
   }
 
-  void refreshSession()
+  // 启动竞态:客户端脚本可能比宿主路由先就绪,一次失败就放弃会让已登录用户
+  // 看不到品牌。重试到拿到明确答复为止,仍失败则保持未登录(下一次复查会纠正)。
+  const STARTUP_RETRY_MS = 1_500
+  const STARTUP_ATTEMPTS = 6
+  void (async () => {
+    for (let attempt = 0; attempt < STARTUP_ATTEMPTS; attempt += 1) {
+      if (await refreshSession()) return
+      await new Promise((resolve) => { setTimeout(resolve, STARTUP_RETRY_MS) })
+    }
+  })()
+
+  // 会话可能在别处变化 —— 在设置页登录(已由 notifySessionChanged 覆盖)、
+  // 宿主重启、或用户在别处退出。窗口重新可见/获得焦点时复查一次,让状态自愈。
+  if (typeof document !== 'undefined') {
+    const recheck = (): void => {
+      if (document.visibilityState === 'visible') void refreshSession()
+    }
+    document.addEventListener('visibilitychange', recheck)
+    window.addEventListener('focus', recheck)
+    ctx.effect(() => () => {
+      document.removeEventListener('visibilitychange', recheck)
+      window.removeEventListener('focus', recheck)
+    }, 'landou-assistant: session re-check listeners')
+  }
 
   // ── 设置页导航项 ──────────────────────────────────────────────────
   // `settings.section` 是列表 slot,导航身份由注册选项给出:
