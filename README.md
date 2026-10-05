@@ -1,15 +1,103 @@
 # 蓝豆助手 · dsh-landou-assistant
 
-**DeepSeek Harness Desktop** 的插件。装上以后:
+**DeepSeek Harness Desktop** 的插件。用你的蓝豆 ERP 账号登录后:
 
 - 侧栏左上角的品牌名从 `DeepSeek Harness` 变成 **蓝豆助手 by DeepSeek Harness**(鲸鱼图标保持原样)
-- 设置面板左栏多出一个 **「蓝豆助手」** 设置页(当前为占位,后续放蓝豆助手自己的设置)
+- 设置面板左栏的 **「蓝豆助手」** 页里是你的账号与后续设置
 
-| 侧栏品牌名 | 设置页 |
-|---|---|
-| ![侧栏](preview.png) | ![设置页](preview-settings.png) |
+**未登录时插件完全不生效** —— 侧栏保持默认品牌。登录入口始终在
+**设置 → 蓝豆助手**。
+
+| 侧栏品牌名(登录后) | 登录 | 注册 |
+|---|---|---|
+| ![侧栏](preview.png) | ![登录](preview-settings.png) | ![注册](preview-signup.png) |
 
 > 只作用于 **Desktop** 版。已安装的 CLI 版不受任何影响。
+
+---
+
+## 账号
+
+用**蓝豆 ERP 账号**(`dmaierp.com`)。没有账号就在同一页的「注册账号」标签里注册:
+邮箱 + 密码 + 显示名称,可选用邮箱验证码与邀请码,注册前需勾选服务条款与跨境数据传输同意。
+
+登录状态保存在本机,重启 Desktop 仍然有效,直到你点「退出登录」。
+
+---
+
+## 认证是怎么走的(以及为什么这么走)
+
+```
+浏览器半边  ──fetch('/landou-assistant/session/login')──▶  宿主半边
+   (拿不到令牌)                                              │
+                                                             │ 代打
+                                                             ▼
+                                              https://dmaierp.com/api/auth/login
+```
+
+**浏览器半边不能直连 ERP。** 实测该站的 CORS 预检:
+
+```
+OPTIONS /api/auth/login  →  400
+  access-control-allow-credentials: true
+  access-control-allow-methods: ...
+  vary: Origin
+  （没有 access-control-allow-origin）
+```
+
+`vary: Origin` 却不回 `allow-origin` 的含义是:服务端只对白名单源放行,
+而 Desktop 的页面源是 `dsh-app://app`,不在其中。
+
+所以请求由**宿主半边**发出。宿主路由挂在 DSH 的 webserver 上,而 Desktop 的 Electron 会把
+`dsh-app://app` 下除静态资源外的**任意路径原样转发**给宿主
+(`apps/desktop/src/web-document.ts` 的 `forwardWebRequest` 没有路径白名单)。
+于是客户端用相对路径 `fetch` 即可做到同源、无 CORS;Web 载体下客户端页面本来就在宿主源上,
+同一份代码同样成立。
+
+**访问令牌永远不进浏览器。** 它只存在于宿主进程与
+`$DSH_HOME/landou-assistant/session.json`(权限 `0600`)。
+这与 DSH 自带的 `credentials-local` 是同一模型 —— 它同样是 harness home 下的私有文件,
+而非系统钥匙串。浏览器能拿到的只有:
+
+```json
+{ "authenticated": true, "userId": "...", "displayName": "...", "expiresAt": 0 }
+```
+
+### 宿主路由
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/landou-assistant/session` | 当前登录状态;令牌到期会自动续期 |
+| `POST` | `/landou-assistant/session/login` | `{ email, password }` |
+| `POST` | `/landou-assistant/session/register` | `{ email, password, displayName, verificationCode?, inviteCode?, acceptedTerms, acceptedCrossBorderTransfer }` |
+| `POST` | `/landou-assistant/session/email-code` | `{ email, purpose: 'register' \| 'reset_password' }` |
+| `POST` | `/landou-assistant/session/logout` | 撤销服务端会话并删除本地令牌 |
+
+ERP 侧契约取自 `https://dmaierp.com/openapi.json`,请求一律带
+`client_type: "landou_assistant"`。另外:
+
+- **禁用重定向** —— 带着凭据的请求绝不跟随跳转离开既定主机。
+- **令牌只在服务端明确否认时才清**(401/403)。网络错误保留会话,
+  否则断网一次就会把用户踢下线。
+- 请求体上限 64 KB,响应只回 JSON 且**不带任何 CORS 头**。
+- 环境变量 `LANDOU_API_BASE_URL`(或 `ERP_API_BASE_URL`)可指向测试部署,
+  默认 `https://dmaierp.com/api`。
+
+### 登录门控怎么实现的
+
+侧栏品牌位的注册**只在已登录时存在**:
+
+```ts
+// 未登录时 brandDisposer 为 undefined,这个占用根本不存在
+brandDisposer = ctx.slots.inject('sidebar.brand.name', function* () {
+  yield ctx.slots.register({ name: 'sidebar.brand.name', priority: -1 }, LandouBrandName)
+})
+```
+
+`slots.inject` 返回 disposer,所以登出时能真正撤掉占用 ——
+**官方品牌插件从未被禁用**,我们的注册消失后它自然重新成为唯一占用者。
+
+设置页那一项**不受登录状态约束**:未登录的用户必须能在这里找到登录入口。
 
 ---
 
@@ -89,13 +177,14 @@ git add lib && git commit -m "build: ..."
 ├── cordis.patch.yml      bundle 层:插入宿主半边的 Loader entry
 ├── tsdown.config.ts      构建配置(纯对象导出,不 import 任何东西)
 ├── src/
-│   ├── index.ts          宿主半边 —— 空 apply
+│   ├── index.ts          宿主半边 —— 认证路由 + ERP 代理 + 令牌落盘
 │   └── client/
-│       ├── index.ts      浏览器半边 —— 注册两处贡献
+│       ├── index.ts      浏览器半边 —— 注册两处贡献 + 登录门控
+│       ├── session.ts    同源 API 客户端(唯一与宿主通信的通道)
 │       ├── locales.ts    中英文案
 │       ├── LandouMark.tsx             豆形标记(内联 SVG)
 │       ├── LandouBrandName.tsx        侧栏品牌名组件
-│       └── LandouSettingsSection.tsx  设置页组件
+│       └── LandouSettingsSection.tsx  登录/注册/账号页
 └── lib/                  预构建产物(随仓库提交)
 ```
 
@@ -109,7 +198,10 @@ git add lib && git commit -m "build: ..."
 | 豆形标记形状 | `src/client/LandouMark.tsx` |
 | 设置页导航位置 | `src/client/index.ts` 注册选项的 `order` |
 | 导航项文案 | `src/client/locales.ts` 的 `nav` |
-| 占位页内容 | `src/client/LandouSettingsSection.tsx` |
+| 登录/注册界面 | `src/client/LandouSettingsSection.tsx` |
+| 认证接口与令牌处理 | `src/index.ts`(宿主半边) |
+| ERP 地址 | 环境变量 `LANDOU_API_BASE_URL`,或 `src/index.ts` 的 `ERP_API_BASE` |
+| 登录门控范围 | `src/client/index.ts` 的 `syncBrand()` |
 
 ### 宽度退化
 
@@ -243,10 +335,18 @@ options: {
 
 ## 已知限制
 
-- 只改**侧栏品牌名**。标题栏、欢迎页、About 面板里的产品名是 Electron 壳或别的包的字面量,
+- **只改侧栏品牌名**。标题栏、欢迎页、About 面板里的产品名是 Electron 壳或别的包的字面量,
   不在 slot 体系里。
 - 设置项**导航图标**无法自定义,原因见上一节。
-- 设置页目前是**占位**,没有任何写入行为。
+- **令牌以明文 JSON 存在 `0600` 文件里**(宿主用户可读)。这与 DSH 自带的
+  `credentials-local` 同级别,但弱于系统钥匙串 —— 后者的接入(Keychain / DPAPI /
+  Secret Service)尚未实现。本机同时被agent 工具进程以同一用户身份运行时,
+  该文件对它们可读。
+- 注册/登录界面目前**不做本地密码强度校验** —— 强度策略由 ERP 服务端裁决,
+  界面上只做必填校验。
+- 尚未实现**找回密码**。ERP 有 `/api/auth/reset-password` 与
+  `/api/auth/password-reset/availability`,宿主已能代理 `/session/email-code`
+  (`purpose: 'reset_password'`),但界面上还没有对应流程。
 - **不发布到 npm**,仅通过 Git 安装。
 
 ## 许可
