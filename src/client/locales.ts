@@ -1,20 +1,74 @@
 /** 蓝豆助手的本地化文案。 */
 
 /** 本插件渲染的文案键。 */
-export type LandouLocaleKey = 'nav' | 'title' | 'intro' | 'placeholder'
+export type LandouLocaleKey =
+  | 'nav' | 'title'
+  | 'signInIntro'
+  | 'signIn' | 'signUp'
+  | 'email' | 'password' | 'displayName' | 'verificationCode' | 'inviteCode'
+  | 'inviteOptional' | 'verificationHint'
+  | 'sendCode' | 'resendIn' | 'codeSent'
+  | 'acceptTerms' | 'acceptCrossBorder'
+  | 'submitSignIn' | 'submitSignUp'
+  | 'working'
+  | 'signedInAs' | 'signedInHint' | 'signOut'
+  | 'gateHint'
+  | 'requiredFields'
 
 /** 英文文案。 */
 export const en: Record<LandouLocaleKey, string> = {
   nav: 'Landou Assistant',
   title: 'Landou Assistant',
-  intro: 'Settings for the Landou Assistant plugin.',
-  placeholder: 'This page is a placeholder. Settings will be added here.',
+  signInIntro: 'Sign in with your Blue Bean ERP account to use this plugin.',
+  signIn: 'Sign in',
+  signUp: 'Create account',
+  email: 'Email',
+  password: 'Password',
+  displayName: 'Display name',
+  verificationCode: 'Email code',
+  inviteCode: 'Invite code',
+  inviteOptional: 'Optional',
+  verificationHint: 'Send a code to this address, then enter it here. Leave empty if the server does not require one.',
+  sendCode: 'Send code',
+  resendIn: 'Resend in {seconds}s',
+  codeSent: 'Code sent. Check your inbox.',
+  acceptTerms: 'I accept the terms of service',
+  acceptCrossBorder: 'I consent to cross-border data transfer',
+  submitSignIn: 'Sign in',
+  submitSignUp: 'Create account',
+  working: 'Working…',
+  signedInAs: 'Signed in as {name}',
+  signedInHint: 'This device stays signed in until you sign out. The access token is kept by the local Blue Bean service, not in this page.',
+  signOut: 'Sign out',
+  gateHint: 'While signed out the sidebar keeps the default brand. After signing in it shows the Blue Bean brand.',
+  requiredFields: 'Fill in every required field',
 }
 
 /** 简体中文文案。 */
 export const zh: Record<LandouLocaleKey, string> = {
   nav: '蓝豆助手',
   title: '蓝豆助手',
-  intro: '蓝豆助手插件的设置。',
-  placeholder: '本页为占位内容，设置项将在这里补充。',
+  signInIntro: '用你的蓝豆 ERP 账号登录后即可使用本插件。',
+  signIn: '登录',
+  signUp: '注册账号',
+  email: '邮箱',
+  password: '密码',
+  displayName: '显示名称',
+  verificationCode: '邮箱验证码',
+  inviteCode: '邀请码',
+  inviteOptional: '选填',
+  verificationHint: '先向该邮箱发送验证码,再填到这里。服务端不要求时可留空。',
+  sendCode: '发送验证码',
+  resendIn: '{seconds} 秒后可重发',
+  codeSent: '验证码已发送,请查收邮箱。',
+  acceptTerms: '我已阅读并同意服务条款',
+  acceptCrossBorder: '我同意数据跨境传输',
+  submitSignIn: '登录',
+  submitSignUp: '注册',
+  working: '处理中…',
+  signedInAs: '已登录:{name}',
+  signedInHint: '本机在退出登录前保持登录状态。访问令牌由本机蓝豆服务保存,不在这个页面里。',
+  signOut: '退出登录',
+  gateHint: '未登录时侧栏保持默认品牌;登录后会显示蓝豆品牌。',
+  requiredFields: '请填写所有必填项',
 }
