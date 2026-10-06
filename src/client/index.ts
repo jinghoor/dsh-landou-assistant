@@ -53,6 +53,9 @@ const LANDOU_SECTION_ID = 'landou-assistant'
  */
 const CANVAS_PANEL_ID = 'landou-canvas'
 
+/** 宿主半边的路由前缀;与 `src/index.ts` 的 `ROUTE_PREFIX` 一致。 */
+const LANDOU_ROUTE_PREFIX = '/landou-assistant'
+
 /**
  * 哪些会话是画布会话。
  *
@@ -90,59 +93,62 @@ export const inject = ['slots', 'locale', 'uiConversation', 'resources', 'layout
  * @param ctx - 浏览器根上下文。
  */
 /**
- * 把绝对路径变成相对会话工作区的路径。
+ * 把一个磁盘路径变成浏览器能加载的 URL。
  *
- * 不在工作区下(或拿不到 cwd)时原样返回 —— 那种路径本来就无法通过会话资源读,
- * 让它照原样失败比悄悄指向别的文件好。
+ * 走**插件宿主半边**自己开的文件路由。为什么不能用 DSH 的资源模型:
+ * `file` 协议的 provider 只产出元数据 —— 原话是 "a workspace file's **metadata**
+ * as a stream of RemoteResult frames",值是 `{absolutePath, version, bytes}`,
+ * **既不含字节也不含 URL**。所以浏览器侧没有任何内置途径把工作区文件读成图片;
+ * 官方的图片预览是从调用方拿字节的,那条通道不属于插件。
+ *
+ * 相对路径由宿主侧解析(路由只接受绝对路径,这里传的就是产物自带的绝对路径),
+ * 而**授权面在宿主**:路由只服务已登记工作区根下面的常规文件,根之外一律 403。
+ * @param path - 产物路径。
+ * @returns 同源可加载的 URL。
+ */
+function previewUrlFor(ctx: ClientContext, sessionId: string, path: string): string {
+  // 同源相对路径:Electron 把 `dsh-app://app` 下除静态资源外的任意路径原样转发给宿主,
+  // Web 载体下客户端本来就在宿主源上,两边都成立、都不经 CORS。
+  return `${LANDOU_ROUTE_PREFIX}/file?path=${encodeURIComponent(absoluteArtifactPath(ctx, sessionId, path))}`
+}
+
+/**
+ * 取会话的工作区根。
  * @param ctx - 插件上下文。
  * @param sessionId - 会话。
- * @param path - 产物路径。
- * @returns 相对路径,或原路径。
+ * @returns 规范化后的根路径;取不到时返回 undefined。
  */
-function relativeToWorkspace(ctx: ClientContext, sessionId: string, path: string): string {
+function workspaceRootOf(ctx: ClientContext, sessionId: string): string | undefined {
   try {
     const sessions = (ctx.get('uiConversation') as { readonly sessions?: unknown } | undefined)?.sessions as
       { readonly list?: { getSnapshot: () => { byId?: Record<string, { cwd?: string } | undefined> } } } | undefined
     const cwd = sessions?.list?.getSnapshot().byId?.[sessionId]?.cwd
-    if (typeof cwd !== 'string' || cwd === '') return path
-    const root = cwd.replace(/[/\\]+$/u, '')
-    return path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path
+    return typeof cwd === 'string' && cwd !== '' ? cwd.replace(/[/\\]+$/u, '') : undefined
   } catch (_error) {
-    return path
+    return undefined
   }
 }
 
 /**
- * 把一个磁盘路径变成浏览器能加载的 URL。
+ * 把产物路径补成绝对路径。
  *
- * 走 **session 作用域**地址:宿主按该会话自己持有的 workspace root 解析 ——
- * 工作区隔离就执行在这一步,而 `absolute` 作用域会绕开它。
+ * 产物的 `produced` 路径**有时相对有时绝对** —— 实测同一个工作区里,
+ * `apple.svg` 是相对的,而另一个会话产出的是绝对路径。宿主路由只接受绝对路径
+ * (`resolve()` 会把相对路径丢到宿主自己的 cwd 上,于是不在任何工作区根下,直接 403),
+ * 所以这里用会话自己的工作区根补齐。
  *
- * `pin` 触发加载,`source(...).getSnapshot()` 拿当前值。第一次调用拿不到是正常的,
- * 上层轮询会再读 —— 所以这里返回 null 而不是抛错。
+ * 补不齐时**原样返回** —— 让宿主按不在工作区内拒绝,而不是猜一个别的文件出来。
  * @param ctx - 插件上下文。
- * @param sessionId - 解析该路径的会话。
- * @param path - 产物路径。
- * @returns 可加载的 URL;尚未就绪或服务不可用时返回 null。
+ * @param sessionId - 会话。
+ * @param path - 产物路径,绝对或相对。
+ * @returns 绝对路径,或原路径。
  */
-function previewUrlFor(ctx: ClientContext, sessionId: string, path: string): string | null {
-  try {
-    const resources = ctx.get('resources') as {
-      readonly pin: (address: string, signal: AbortSignal) => void
-      readonly source: (address: string) => { getSnapshot: () => { value?: { url?: string } } }
-    } | undefined
-    if (resources === undefined) return null
-    // **必须相对工作区。** 实测:session 作用域地址里放绝对路径,状态永远停在
-    // "loading"(不报错、不失败,就是不落地);放相对路径立刻是 "live"。
-    // 宿主按该会话自己持有的 workspace root 解析相对路径 —— 工作区隔离也正落在这一步。
-    const address = sessionFileAddress(sessionId, relativeToWorkspace(ctx, sessionId, path))
-    resources.pin(address, new AbortController().signal)
-    const value = resources.source(address).getSnapshot().value
-    return typeof value?.url === 'string' ? value.url : null
-  } catch (_error) {
-    return null
-  }
+function absoluteArtifactPath(ctx: ClientContext, sessionId: string, path: string): string {
+  if (path.startsWith('/')) return path
+  const root = workspaceRootOf(ctx, sessionId)
+  return root === undefined ? path : `${root}/${path.replace(/^\/+/u, '')}`
 }
+
 
 export function apply(ctx: ClientContext): void {
   /** 「画布会话」被点过、但新会话还没落地 —— 落地时把它记成画布会话。 */

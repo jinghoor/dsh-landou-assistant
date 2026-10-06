@@ -20,10 +20,10 @@
  * @module dsh-landou-assistant/host
  */
 import { randomUUID } from 'node:crypto'
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, extname, join, resolve, sep } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 
 /** Cordis 插件名。 */
@@ -59,6 +59,76 @@ function resolveDshHome(): string {
   const fromEnvironment = process.env.DSH_HOME
   if (typeof fromEnvironment === 'string' && fromEnvironment.trim() !== '') return fromEnvironment
   return join(homedir(), '.dsh')
+}
+
+/**
+ * 画布预览用的 MIME 表。
+ *
+ * 只列画布会渲染的三类:图片、视频、文字。表外的扩展名一律 `application/octet-stream` ——
+ * 猜错的 MIME 会让浏览器把文件当别的东西处理,比不认得还糟。
+ */
+const PREVIEW_MIME: Record<string, string> = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.avif': 'image/avif', '.svg': 'image/svg+xml', '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime', '.m4v': 'video/x-m4v',
+  '.ogv': 'video/ogg',
+  '.txt': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8',
+  '.json': 'application/json; charset=utf-8', '.csv': 'text/plain; charset=utf-8',
+  '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8', '.ts': 'text/plain; charset=utf-8',
+}
+
+/** 工作区根缓存:根在一次进程生命周期内基本不变。 */
+let rootsCache: { at: number; roots: string[] } | undefined
+
+/** 缓存有效期。够短,工作区真的换了也不会长期用旧的。 */
+const ROOTS_TTL_MS = 15_000
+
+/**
+ * 本机已登记的工作区根目录。
+ *
+ * 文件路由**只服务这些根下面的文件**。这是路由的授权面:客户端只可能为当前会话的
+ * 产物请求字节,而产物路径落在该会话的工作区里 —— 但那是客户端的自律,
+ * 不能当授权的依据。真正把范围钉死的是这里:根之外一律 403。
+ *
+ * 读不到(没有 storage、格式变了)就返回空集 —— 空集意味着**什么都服务不了**,
+ * 这是安全侧的失败方向。
+ * @returns 规范化后的绝对根路径列表。
+ */
+async function workspaceRoots(): Promise<string[]> {
+  // **缓存是必须的,不是优化。** 实测:重启后最初的几个预览请求全部 403 ——
+  // 那时 workspace 存储还没落盘,读到空集就等于"没有可服务的工作区"。
+  // 而浏览器对失败过的 `<img>` 不会自己重试,所以首次失败是**粘住**的:
+  // 手工再打同一个 URL 立刻是 200,页面上却永远空着。
+  // 空集刻意**不入缓存**,这样存储落盘后的下一次请求能自己恢复。
+  if (rootsCache !== undefined && Date.now() - rootsCache.at < ROOTS_TTL_MS) return rootsCache.roots
+  try {
+    const raw = await readFile(join(resolveDshHome(), 'storages', 'workspace.json'), 'utf8')
+    const parsed = JSON.parse(raw) as unknown
+    const roots: string[] = []
+    const walk = (value: unknown): void => {
+      if (typeof value === 'string') {
+        if (value.startsWith('/')) roots.push(resolve(value))
+        return
+      }
+      if (Array.isArray(value)) { for (const item of value) walk(item); return }
+      if (value !== null && typeof value === 'object') {
+        for (const item of Object.values(value as Record<string, unknown>)) walk(item)
+      }
+    }
+    walk(parsed)
+    const unique = [...new Set(roots)]
+    if (unique.length > 0) rootsCache = { at: Date.now(), roots: unique }
+    return unique
+  } catch (_error) {
+    return []
+  }
+}
+
+/** 目标是否落在某个已登记的工作区根之下。 */
+function underAnyRoot(target: string, roots: readonly string[]): boolean {
+  return roots.some((root) => target === root || target.startsWith(root.endsWith(sep) ? root : root + sep))
 }
 
 /** 落盘位置。 */
@@ -283,12 +353,47 @@ async function completeAuth<T extends ErpTokenResponse>(res: ServerResponse, res
  * @param ctx - 宿主上下文;`webServer` 由 inject 保证存在。
  */
 export function apply(ctx: Context): void {
+  // 启动就预热一次,让第一个预览请求落在已缓存的根上,而不是撞上"存储还没落盘"。
+  void workspaceRoots()
+
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: ROUTE_PREFIX,
     handler: async (req, res) => {
       const path = (req.url ?? '').split('?')[0]?.slice(ROUTE_PREFIX.length) ?? ''
       const method = req.method ?? 'GET'
+
+      // ── 画布预览的文件字节 ────────────────────────────────────────
+      // 存在的理由:`file` 资源协议只给元数据(`{absolutePath, version, bytes}`),
+      // **不含字节也不含 URL**(实测读 providers/workspace-files/src/client/provider.ts),
+      // 所以浏览器侧没有任何内置途径把工作区文件读成图片。官方图片预览是从调用方
+      // 拿字节的,那条通道不属于插件。这里补的正是这一段。
+      if (method === 'GET' && path === '/file') {
+        const requested = new URL(req.url ?? '/', 'http://localhost').searchParams.get('path')
+        if (requested === null || requested === '') { sendJson(res, 400, { error: 'path 必填' }); return }
+        const target = resolve(requested)
+        const roots = await workspaceRoots()
+        if (!underAnyRoot(target, roots)) { sendJson(res, 403, { error: '不在任何已登记的工作区内' }); return }
+        let info
+        try {
+          info = await stat(target)
+        } catch (_error) {
+          sendJson(res, 404, { error: '文件不存在' }); return
+        }
+        if (!info.isFile()) { sendJson(res, 400, { error: '不是常规文件' }); return }
+        const bytes = await readFile(target)
+        res.writeHead(200, {
+          'content-type': PREVIEW_MIME[extname(target).toLowerCase()] ?? 'application/octet-stream',
+          // 产物会被后续轮次覆盖,所以不能长缓存;`no-cache` 仍允许 304 协商。
+          'cache-control': 'no-cache',
+          'content-length': bytes.byteLength,
+          // 这是用户自己的工作区文件,但标签页不该拿到它的脚本执行权。
+          'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+          'x-content-type-options': 'nosniff',
+        })
+        res.end(bytes)
+        return
+      }
 
       // ── 当前会话:客户端启动与每次登录状态检查都打这里 ──────────────
       if (method === 'GET' && path === '/session') {
