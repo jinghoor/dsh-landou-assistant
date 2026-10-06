@@ -376,7 +376,11 @@ export function apply(ctx: ClientContext): void {
         // 切回普通会话时把布局还回去,否则会停在一个不属于它的画布上。
         layout.selectPanel(null)
       }
-    }, 400)
+    // **80ms,不是 400ms。** 布局切换发生在这个轮询里,而它每慢一拍,用户就多看到
+    // 一帧普通会话 —— 实测录屏:点「画布会话」会先闪出普通对话页再跳过来。
+    // 面板没法提前选(selectPanel 会中止正在进行的会话创建,那是老 bug),所以只能
+    // 让"发现新会话"这件事尽量快。80ms 对人眼已经是一帧的量级。
+    }, 80)
     return () => { window.clearInterval(timer) }
   }, 'landou: canvas layout follows the session')
 
@@ -467,6 +471,19 @@ export function apply(ctx: ClientContext): void {
           at: Date.now(),
         }
         startSession()
+        // **立刻切到画布面板,并明确不中止刚发起的会话创建。**
+        // `selectPanel` 默认会 `navigation.abort()`,而那条导航正是这次 startSession 的
+        // 会话创建 —— 中止了会话就建不出来(老 bug)。现在它支持 `keepNavigation`,
+        // 于是"创建会话 + 落到画布面板"能一次做完。
+        //
+        // 不这么做的后果是**肉眼可见的一帧普通会话**:创建要 ~160ms,而面板只能在
+        // 创建完成后才切,那段时间界面按普通对话渲染(录屏实测)。
+        //
+        // 下面的布局跟随仍然保留 —— 它管的是重载、切走再回来这些情形,不是这一帧。
+        const layout = ctx.get('layout') as {
+          readonly selectPanel?: (id: string | null, options?: { readonly keepNavigation?: boolean }) => void
+        } | undefined
+        layout?.selectPanel?.(CANVAS_PANEL_ID, { keepNavigation: true })
         void workspaceId
       },
     }),
