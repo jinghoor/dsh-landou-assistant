@@ -31,6 +31,8 @@ export interface LandouCanvasBodyInjected {
    * 而预览 URL 是异步到的,不订阅就永远看不到图。
    */
   useArtifacts: (select: (nodes: readonly CanvasNode[]) => readonly CanvasNode[]) => readonly CanvasNode[]
+  /** 在右侧文档面板里打开一个产物;拿不到服务时退回新窗口。 */
+  openArtifact: (path: string, url: string) => void
 }
 
 /** 本组件需要的全部 props。 */
@@ -77,7 +79,7 @@ const NODE_STYLE: Record<string, string | number> = {
  * @param props - 产物与 URL 解析器。
  * @returns 缩略图卡片。
  */
-function ImageNode({ artifact, url, t }: { artifact: Artifact; url: string | null; t: LandouCanvasBodyProps['t'] }) {
+function ImageNode({ artifact, url, t, onOpen }: { artifact: Artifact; url: string | null; t: LandouCanvasBodyProps['t']; onOpen: LandouCanvasBodyProps['openArtifact'] }) {
   return (
     <figure style={{ ...NODE_STYLE, ...WIDE_SPAN, margin: 0 }} data-landou-node="image" data-landou-path={artifact.path} title={artifact.path}>
       <div style={{ aspectRatio: '4 / 3', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
@@ -85,8 +87,8 @@ function ImageNode({ artifact, url, t }: { artifact: Artifact; url: string | nul
           ? <span style={{ fontSize: 11, opacity: 0.45, padding: 8, textAlign: 'center' }}>{t('canvas.noPreview')}</span>
           : <img src={url} alt={artifact.name} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', display: 'block' }} />}
       </div>
-      <figcaption style={{ fontSize: 11, padding: '4px 8px', opacity: 0.75, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {artifact.name}
+      <figcaption style={{ display: 'flex' }}>
+        <NodeOpenButton artifact={artifact} url={url} onOpen={onOpen} />
       </figcaption>
     </figure>
   )
@@ -97,7 +99,7 @@ function ImageNode({ artifact, url, t }: { artifact: Artifact; url: string | nul
  * @param props - 产物与 URL 解析器。
  * @returns 可预览的播放器卡片。
  */
-function VideoNode({ artifact, url, t }: { artifact: Artifact; url: string | null; t: LandouCanvasBodyProps['t'] }) {
+function VideoNode({ artifact, url, t, onOpen }: { artifact: Artifact; url: string | null; t: LandouCanvasBodyProps['t']; onOpen: LandouCanvasBodyProps['openArtifact'] }) {
   return (
     <figure style={{ ...NODE_STYLE, ...WIDE_SPAN, margin: 0 }} data-landou-node="video" data-landou-path={artifact.path} title={artifact.path}>
       <div style={{ aspectRatio: '16 / 9', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', background: '#000' }}>
@@ -105,10 +107,55 @@ function VideoNode({ artifact, url, t }: { artifact: Artifact; url: string | nul
           ? <span style={{ fontSize: 11, opacity: 0.45, color: '#fff' }}>{t('canvas.noPreview')}</span>
           : <video src={url} controls preload="metadata" style={{ maxWidth: '100%', maxHeight: '100%', display: 'block' }} />}
       </div>
-      <figcaption style={{ fontSize: 11, padding: '4px 8px', opacity: 0.75, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {artifact.name}
+      <figcaption style={{ display: 'flex' }}>
+        <NodeOpenButton artifact={artifact} url={url} onOpen={onOpen} />
       </figcaption>
     </figure>
+  )
+}
+
+/**
+ * 节点底部那一行可点的文件名。
+ *
+ * 产物节点不该是死图:**看到之后下一步总是"打开它"**,所以文件名本身就是入口。
+ * 点击走注册处注入的 `openArtifact(路径, 兜底 URL)` —— 组件拿不到 ctx,这是硬规矩;
+ * 而兜底 URL 让服务缺席时至少还能在新窗口里打开。
+ * @param props - 产物、兜底 URL、打开动作与对齐方式。
+ * @returns 一个按钮。
+ */
+function NodeOpenButton({ artifact, url, onOpen, align = 'stretch' }: {
+  readonly artifact: Artifact
+  readonly url: string
+  readonly onOpen: LandouCanvasBodyProps['openArtifact']
+  readonly align?: 'start' | 'stretch'
+}) {
+  return (
+    <button
+      type="button"
+      data-landou-open=""
+      onClick={() => { onOpen(artifact.path, url) }}
+      title={artifact.path}
+      style={{
+        flex: align === 'stretch' ? 1 : '0 1 auto',
+        minWidth: 0,
+        textAlign: 'left',
+        font: 'inherit',
+        fontSize: 12,
+        color: 'inherit',
+        background: 'transparent',
+        border: 'none',
+        padding: 0,
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        textDecoration: 'underline',
+        textDecorationColor: 'color-mix(in srgb, currentColor 28%, transparent)',
+        textUnderlineOffset: 3,
+      }}
+    >
+      {artifact.name}
+    </button>
   )
 }
 
@@ -121,7 +168,7 @@ function VideoNode({ artifact, url, t }: { artifact: Artifact; url: string | nul
  * @param props - 产物与已取到的内容预览。
  * @returns 文字卡片。
  */
-function TextNode({ artifact, preview }: { artifact: Artifact; preview?: string | null }) {
+function TextNode({ artifact, preview, url, onOpen }: { artifact: Artifact; preview?: string | null; url: string; onOpen: LandouCanvasBodyProps['openArtifact'] }) {
   const hasBody = typeof preview === 'string' && preview.trim() !== ''
   return (
     <div style={{ ...NODE_STYLE, padding: 10, gap: 8 }} data-landou-node="text" data-landou-path={artifact.path} title={artifact.path}>
@@ -132,7 +179,7 @@ function TextNode({ artifact, preview }: { artifact: Artifact; preview?: string 
         >
           {artifact.extension === '' ? 'text' : artifact.extension}
         </span>
-        <span style={{ fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{artifact.name}</span>
+        <NodeOpenButton artifact={artifact} url={url} onOpen={onOpen} align="start" />
       </div>
       {hasBody
         ? <pre style={{ margin: 0, fontSize: 11, lineHeight: 1.5, opacity: 0.8, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 132, overflow: 'hidden', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{preview}</pre>
@@ -147,7 +194,7 @@ function TextNode({ artifact, preview }: { artifact: Artifact; preview?: string 
  * @returns 节点网格,或空状态。
  */
 export function LandouCanvasBody(props: LandouCanvasBodyProps) {
-  const { useArtifacts, t } = props
+  const { useArtifacts, openArtifact, t } = props
   const nodes = useArtifacts(all => all)
 
   if (nodes.length === 0) {
@@ -166,9 +213,9 @@ export function LandouCanvasBody(props: LandouCanvasBodyProps) {
     <div data-landou-canvas-grid="" style={GRID_STYLE}>
       {nodes.map((node) => {
         const { artifact, url } = node
-        if (artifact.kind === 'image') return <ImageNode key={artifact.path} artifact={artifact} url={url} t={t} />
-        if (artifact.kind === 'video') return <VideoNode key={artifact.path} artifact={artifact} url={url} t={t} />
-        return <TextNode key={artifact.path} artifact={artifact} preview={node.preview} />
+        if (artifact.kind === 'image') return <ImageNode key={artifact.path} artifact={artifact} url={url} t={t} onOpen={openArtifact} />
+        if (artifact.kind === 'video') return <VideoNode key={artifact.path} artifact={artifact} url={url} t={t} onOpen={openArtifact} />
+        return <TextNode key={artifact.path} artifact={artifact} preview={node.preview} url={url} onOpen={openArtifact} />
       })}
     </div>
   )

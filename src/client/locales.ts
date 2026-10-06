@@ -14,7 +14,7 @@ export type LandouLocaleKey =
   | 'signedInAs' | 'signedInHint' | 'signOut'
   | 'gateHint'
   | 'requiredFields'
-  | 'canvas.panel' | 'canvas.badge' | 'canvas.toolbarHint' | 'canvas.empty' | 'canvas.noPreview'
+  | 'canvas.panel' | 'canvas.badge' | 'canvas.toolbarHint' | 'canvas.empty' | 'canvas.noPreview' | 'canvas.open'
 
 /** 英文文案。 */
 export const en: Record<LandouLocaleKey, string> = {
@@ -46,6 +46,7 @@ export const en: Record<LandouLocaleKey, string> = {
   'canvas.toolbarHint': 'Canvas',
   'canvas.empty': 'No artifacts yet. Ask the agent to create an image, a video, or text.',
   'canvas.noPreview': 'Preview unavailable',
+  'canvas.open': 'Open in the document panel',
   gateHint: 'The sidebar shows the Blue Bean brand whether or not you are signed in. Signing in unlocks this page’s settings and features.',
   requiredFields: 'Fill in every required field',
 }
@@ -80,6 +81,7 @@ export const zh: Record<LandouLocaleKey, string> = {
   'canvas.toolbarHint': '画布',
   'canvas.empty': '画布上还没有产物。让 agent 生成图片、视频或文字,产物会出现在这里。',
   'canvas.noPreview': '预览不可用',
+  'canvas.open': '在文档面板中打开',
   gateHint: '侧栏品牌名与登录无关,装上插件即可见。登录用于解锁本页的设置与功能。',
   requiredFields: '请填写所有必填项',
 }

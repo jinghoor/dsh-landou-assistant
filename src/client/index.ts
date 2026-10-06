@@ -178,6 +178,41 @@ function workspaceRootOf(ctx: ClientContext, sessionId: string): string | undefi
 }
 
 /**
+ * 在 DSH 的右侧文档面板里打开一个产物。
+ *
+ * 走官方入口 `sidebarRight.openResource(地址)` —— `ui-reference` 就是这么做的。
+ * 地址用 **session 作用域**(`dsh-resource://file/session/<id>/<相对路径>`):
+ * 宿主按该会话自己持有的 workspace root 解析,与预览字节那条路由同一套隔离。
+ *
+ * 服务缺席或打不开时退回在新窗口里打开插件自己的预览路由 —— 那至少能让用户看到东西,
+ * 而节点点了毫无反应是最差的。
+ * @param ctx - 插件上下文。
+ * @param sessionId - 会话。
+ * @param path - 产物路径。
+ * @param url - 插件预览路由的 URL,作为兜底。
+ * @returns 无。
+ */
+function openArtifact(ctx: ClientContext, sessionId: string, path: string, url: string): void {
+  const root = workspaceRootOf(ctx, sessionId)
+  const relative = root !== undefined && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path
+  try {
+    const sidebarRight = ctx.get('sidebarRight') as
+      { readonly openResource?: (address: string) => void } | undefined
+    if (sidebarRight?.openResource !== undefined) {
+      sidebarRight.openResource(sessionFileAddress(sessionId, relative))
+      return
+    }
+  } catch (_error) {
+    // 落下去用兜底,不要在这里吞掉用户的点击。
+  }
+  try {
+    window.open(url, '_blank', 'noopener,noreferrer')
+  } catch (_error) {
+    // 弹窗被拦也就算了:节点本来的作用是把产物显示出来,那件事已经做完了。
+  }
+}
+
+/**
  * 把产物路径补成绝对路径。
  *
  * 产物的 `produced` 路径**有时相对有时绝对** —— 实测同一个工作区里,
@@ -385,7 +420,11 @@ export function apply(ctx: ClientContext): void {
     // inject 必须是**函数** —— 写成对象字面量会在注册时抛
     // `TypeError: inject is not a function`,而报错只指向 slot 核心,
     // 症状是"画布主体整个不渲染"(既无网格也无空态)。
-    inject: () => ({ hooks: { artifacts: canvas.source } }),
+    inject: () => ({
+      hooks: { artifacts: canvas.source },
+      // 注册处注入而不是让组件自己取 ctx:业务组件看不到 ctx,这是 DSH 的硬规矩。
+      openArtifact: (path: string, url: string) => { openArtifact(ctx, sessionId, path, url) },
+    }),
   }, LandouCanvasBody))
 
   // 工具条徽章走和其它贡献者完全相同的路注册进上面那个座位。
