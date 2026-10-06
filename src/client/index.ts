@@ -24,6 +24,9 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { LandouBrandName } from './LandouBrandName.tsx'
+import { LandouCanvasBadge } from './LandouCanvasBadge.tsx'
+import { LandouCanvasIcon } from './LandouCanvasIcon.tsx'
+import { LandouCanvasPanel } from './LandouCanvasPanel.tsx'
 import { LandouLauncherItem } from './LandouLauncherItem.tsx'
 import { LandouSettingsSection } from './LandouSettingsSection.tsx'
 import { en, zh } from './locales.ts'
@@ -39,6 +42,12 @@ const NS = 'landou-assistant'
  * 两边写死字符串迟早会改一处漏一处,那样菜单点了会落到"没有这个分区"。
  */
 const LANDOU_SECTION_ID = 'landou-assistant'
+
+/**
+ * 画布会话在主面板里的键。同一个值同时用于三处:main 面板的 key、侧栏行的 id、
+ * 以及 `layout.selectPanel` 的目标 —— 写死三遍迟早会漂。
+ */
+const CANVAS_PANEL_ID = 'landou-canvas'
 
 /** 必需服务:UI slot 注册表 + 本地化字典。 */
 export const inject = ['slots', 'locale']
@@ -76,6 +85,37 @@ export function apply(ctx: ClientContext): void {
     order: -100,
     locale: NS,
   }, LandouLauncherItem))
+
+  // ── 画布会话 ──────────────────────────────────────────────────────
+  // `main` 是 keyed slot:侧栏会用每个已注册的 key 渲染一行面板入口,位置就在
+  // 「新会话」按钮正下方 —— 这正是"除了新建新会话,还能新建新画布会话"的落点。
+  // 行的图标来自 `sidebar.panellist`,标题来自那里的 label。
+  //
+  // 本面板不重写会话,而是托管原版那一份(见 LandouCanvasPanel 的说明)。
+  ctx.slots.inject('main', () => ctx.slots.register({
+    name: 'main',
+    key: CANVAS_PANEL_ID,
+    locale: NS,
+    // 声明一个 session 作用域的子 slot:既是工具条座位,也是框架给出
+    // `SessionProvider` 的条件。声明与使用是同一件事,不留空声明。
+    children: { 'landou.canvas.toolbar': { kind: 'list', scope: 'session' } },
+  }, LandouCanvasPanel))
+
+  ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+    name: 'sidebar.panellist',
+    id: CANVAS_PANEL_ID,
+    order: 20,
+    locale: NS,
+    label: () => t('canvas.panel'),
+  }, LandouCanvasIcon))
+
+  // 工具条徽章走和其它贡献者完全相同的路注册进上面那个座位。
+  ctx.slots.inject('landou.canvas.toolbar', () => ctx.slots.register({
+    name: 'landou.canvas.toolbar',
+    id: 'canvas-badge',
+    order: 0,
+    locale: NS,
+  }, LandouCanvasBadge))
 
   // ── 设置页导航项 ──────────────────────────────────────────────────
   // `settings.section` 是列表 slot,导航身份由注册选项给出:

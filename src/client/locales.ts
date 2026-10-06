@@ -14,6 +14,7 @@ export type LandouLocaleKey =
   | 'signedInAs' | 'signedInHint' | 'signOut'
   | 'gateHint'
   | 'requiredFields'
+  | 'canvas.panel' | 'canvas.badge' | 'canvas.toolbarHint'
 
 /** 英文文案。 */
 export const en: Record<LandouLocaleKey, string> = {
@@ -40,6 +41,9 @@ export const en: Record<LandouLocaleKey, string> = {
   signedInAs: 'Signed in as {name}',
   signedInHint: 'This device stays signed in until you sign out. The access token is kept by the local Blue Bean service, not in this page.',
   signOut: 'Sign out',
+  'canvas.panel': 'Canvas session',
+  'canvas.badge': 'Canvas session',
+  'canvas.toolbarHint': 'Canvas',
   gateHint: 'The sidebar shows the Blue Bean brand whether or not you are signed in. Signing in unlocks this page’s settings and features.',
   requiredFields: 'Fill in every required field',
 }
@@ -69,6 +73,9 @@ export const zh: Record<LandouLocaleKey, string> = {
   signedInAs: '已登录:{name}',
   signedInHint: '本机在退出登录前保持登录状态。访问令牌由本机蓝豆服务保存,不在这个页面里。',
   signOut: '退出登录',
+  'canvas.panel': '画布会话',
+  'canvas.badge': '画布会话',
+  'canvas.toolbarHint': '画布',
   gateHint: '侧栏品牌名与登录无关,装上插件即可见。登录用于解锁本页的设置与功能。',
   requiredFields: '请填写所有必填项',
 }
