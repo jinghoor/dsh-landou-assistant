@@ -339,7 +339,13 @@ export function apply(ctx: ClientContext): void {
       const changed = session !== lastSession
       lastSession = session
       const pending = pendingCanvasSession
-      const settled = pending !== undefined && (changed || Date.now() - pending.at > 1200)
+      // **不等,一发现新会话就收尾。** 原来要等 1200ms,是因为 DSH 会复用空白会话、
+      // id 可能根本不变,只能靠"等一小会儿还是同一个"来判定。现在每次新建都是**新的**
+      // 会话(id 必变),那个等待就没有意义了 —— 而它正好造成肉眼可见的闪烁:
+      // 先按普通会话渲染,一秒多之后才跳到画布。实测就是这个症状。
+      //
+      // 保留一个很短的兜底:万一某条路径真的复用了会话,也不至于永远收不了尾。
+      const settled = pending !== undefined && (changed || Date.now() - pending.at > 250)
       const marked = readCanvasSessions()
       if (pending !== undefined && settled) {
         pendingCanvasSession = undefined
