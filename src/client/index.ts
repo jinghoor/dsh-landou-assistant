@@ -195,11 +195,26 @@ function workspaceRootOf(ctx: ClientContext, sessionId: string): string | undefi
 function openArtifact(ctx: ClientContext, sessionId: string, path: string, url: string): void {
   const root = workspaceRootOf(ctx, sessionId)
   const relative = root !== undefined && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path
+  const address = sessionFileAddress(sessionId, relative)
   try {
-    const sidebarRight = ctx.get('sidebarRight') as
-      { readonly openResource?: (address: string) => void } | undefined
+    const sidebarRight = ctx.get('sidebarRight') as {
+      readonly openResource?: (address: string) => void
+      readonly isExpanded?: () => boolean
+      readonly toggleExpanded?: () => void
+    } | undefined
     if (sidebarRight?.openResource !== undefined) {
-      sidebarRight.openResource(sessionFileAddress(sessionId, relative))
+      // **右栏收起时必须先展开。** `openResource` 写的是"当前已挂载的那个会话面"
+      // (`service.ts` 的 `require()` 读 `this.mounted`),而 `RightbarSeat` 只在展开时
+      // 才为会话开面 —— 实测收起时 `mounted: null`、`isExpanded: false`,于是它抛
+      // `no session surface is mounted`。展开与挂载之间隔一拍,所以打开要延后。
+      if (sidebarRight.isExpanded?.() === false && sidebarRight.toggleExpanded !== undefined) {
+        sidebarRight.toggleExpanded()
+        window.setTimeout(() => {
+          try { sidebarRight.openResource?.(address) } catch (_error) { /* 交给下面那次点击的兜底 */ }
+        }, 350)
+        return
+      }
+      sidebarRight.openResource(address)
       return
     }
   } catch (_error) {
