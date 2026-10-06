@@ -25,6 +25,9 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { LandouBrandName } from './LandouBrandName.tsx'
 import { LandouCanvasBadge } from './LandouCanvasBadge.tsx'
+import { LandouCanvasBody } from './LandouCanvasBody.tsx'
+import { readSessionArtifacts } from './canvas-artifacts.ts'
+import { sessionFileAddress } from './file-address.ts'
 import { LandouCanvasIcon } from './LandouCanvasIcon.tsx'
 import { LandouCanvasPanel } from './LandouCanvasPanel.tsx'
 import { LandouLauncherItem } from './LandouLauncherItem.tsx'
@@ -50,7 +53,7 @@ const LANDOU_SECTION_ID = 'landou-assistant'
 const CANVAS_PANEL_ID = 'landou-canvas'
 
 /** 必需服务:UI slot 注册表 + 本地化字典。 */
-export const inject = ['slots', 'locale']
+export const inject = ['slots', 'locale', 'uiConversation', 'resources']
 
 /**
  * 注册本插件的全部浏览器贡献。
@@ -98,7 +101,12 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     // 声明一个 session 作用域的子 slot:既是工具条座位,也是框架给出
     // `SessionProvider` 的条件。声明与使用是同一件事,不留空声明。
-    children: { 'landou.canvas.toolbar': { kind: 'list', scope: 'session' } },
+    children: {
+      'landou.canvas.toolbar': { kind: 'list', scope: 'session' },
+      // 画布主体必须是 session 作用域:面板在 root 上拿不到 sessionId,而产物按会话取。
+      // 顺带这也是框架给出 SessionProvider 的条件。
+      'landou.canvas.body': { kind: 'single', scope: 'session' },
+    },
   }, LandouCanvasPanel))
 
   ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
@@ -108,6 +116,29 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     label: () => t('canvas.panel'),
   }, LandouCanvasIcon))
+
+  // ── 画布主体 ──────────────────────────────────────────────────────
+  // inject 闭包拿到的 ctx 与 entry 的 sessionId;主体据此读产物、算预览地址。
+  ctx.slots.inject('landou.canvas.body', () => ctx.slots.register({
+    name: 'landou.canvas.body',
+    id: 'canvas-body',
+    locale: NS,
+    inject: (sessionId) => ({
+      readArtifacts: () => readSessionArtifacts(ctx.uiConversation, sessionId),
+      // 预览走 session 作用域地址:宿主按该会话自己的工作区根解析 —— 隔离就落在这里。
+      // resources.source() 是快照,值要等加载;取不到就返回 null,节点显示"预览不可用"
+      // 而不是崩掉。pin() 触发加载,下一次渲染就能拿到 URL。
+      resolvePreviewUrl: (path) => {
+        try {
+          const address = sessionFileAddress(sessionId, path)
+          ctx.resources.pin(address, new AbortController().signal)
+          return ctx.resources.source(address).getSnapshot().value?.url ?? null
+        } catch (_error) {
+          return null
+        }
+      },
+    }),
+  }, LandouCanvasBody))
 
   // 工具条徽章走和其它贡献者完全相同的路注册进上面那个座位。
   ctx.slots.inject('landou.canvas.toolbar', () => ctx.slots.register({

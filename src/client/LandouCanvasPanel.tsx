@@ -48,7 +48,7 @@ export interface LandouCanvasPanelProps extends PropsLocale<'landou-assistant'> 
    */
   SessionProvider: (props: { children: unknown; empty?: () => unknown }) => unknown
   /** 声明过的子 slot 渲染入口。 */
-  renderSlot: (key: 'landou.canvas.toolbar', owner: Record<string, never>) => unknown
+  renderSlot: (key: 'landou.canvas.toolbar' | 'landou.canvas.body', owner: Record<string, never>) => unknown
   /** 工厂座位。 */
   renderFactorySlot: (key: 'conversation.content', owner: ConversationContentInput) => unknown
 }
@@ -115,11 +115,11 @@ export function LandouCanvasPanel(props: LandouCanvasPanelProps) {
         >
           {renderSlot('landou.canvas.toolbar', {})}
         </div>
-        <div
-          data-landou-canvas-empty=""
-          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 'calc(100% - 32px)', padding: 24, fontSize: 13, opacity: 0.5, textAlign: 'center' }}
-        >
-          {t('canvas.empty')}
+        {/* 画布主体是**面板自己声明的** session 作用域座位:面板在 root 上拿不到
+            sessionId,而产物按会话取 —— 没有 id 就只能猜,猜错会把别的会话的产物
+            显示成当前会话的,那比不显示更糟。座位声明同时满足框架给出 SessionProvider 的条件。 */}
+        <div style={{ height: 'calc(100% - 32px)', minHeight: 0, overflow: 'auto' }}>
+          {renderSlot('landou.canvas.body', {})}
         </div>
       </section>
 
