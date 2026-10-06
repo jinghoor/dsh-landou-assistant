@@ -252,6 +252,69 @@ export function apply(ctx: ClientContext): void {
   const t = ctx.locale.bind(NS)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'landou-assistant: dictionaries')
 
+  // ── 画布产物的刷新 ────────────────────────────────────────────────
+  // 产物列表本身能同步读,但**预览 URL 不能** —— resources 是异步加载的。不轮询刷新
+  // 的话图片节点会永远停在"预览不可用":数据后来到了,却没有东西让组件重渲染。
+  // 800ms:产物是低频事件,快没必要;而比"猜一个订阅接口"可靠得多 ——
+  // 产物来自会话事件的折叠,那个折叠把状态放在内部结构里,没有可订阅的口子。
+  ctx.effect(() => {
+    const timer = window.setInterval(() => {
+      const sessionId = (ctx.get('uiSession') as { readonly mainRetainId?: string } | undefined)?.mainRetainId
+      if (sessionId === undefined) { canvas.publish([]); return }
+      const artifacts = readSessionArtifacts(ctx.get('uiConversation'), sessionId)
+      void Promise.all(artifacts.map(async (artifact) => {
+        const url = previewUrlFor(ctx, sessionId, artifact.path)
+        return { artifact, url, preview: await loadTextPreview(url, artifact.path) }
+      })).then((nodes) => { canvas.publish(nodes) })
+    }, 800)
+    return () => { window.clearInterval(timer) }
+  }, 'landou: canvas artifacts')
+
+  // ── 画布会话的布局跟随 ────────────────────────────────────────────
+  // 当前会话一换就决定用哪个布局:是画布会话就切到画布面板,不是就切回对话。
+  // 这让"画布会话"成为**会话自身的属性**,而不是一次性的界面动作 —— 重载、从会话列表
+  // 点回来、切到别的会话,行为都一致。
+  //
+  // **电平触发,不是边沿触发。** 只在"会话变化"时评估的写法漏掉了"人已经待在某个会话里、
+  // 标记之后才写入"这一情形(实测:标记写进去了,面板没切)。每次都算一遍期望布局、
+  // 和现状不符就纠正,一条规则同时覆盖会话切换、重载恢复、迟到标记三种情形。
+  //
+  // 用轮询而不是订阅:`uiSession.mainRetainId` 是普通字符串字段,不是可观察量
+  // (`uiSession.current` 那个可观察量给的是绑定源,不含会话 id)。
+  ctx.effect(() => {
+    let lastSession = ''
+    const timer = window.setInterval(() => {
+      const session = (ctx.get('uiSession') as { readonly mainRetainId?: string } | undefined)?.mainRetainId
+      if (session === undefined) return
+      const changed = session !== lastSession
+      lastSession = session
+      const pending = pendingCanvasSession
+      const settled = pending !== undefined && (changed || Date.now() - pending.at > 1200)
+      const marked = readCanvasSessions()
+      if (pending !== undefined && settled) {
+        pendingCanvasSession = undefined
+        marked.add(session)
+        writeCanvasSessions(marked)
+      } else if (pending !== undefined && Date.now() - pending.at > 8000) {
+        // 迟迟收不了尾就丢掉,免得一个陈旧待办日后标记一个无关会话。
+        pendingCanvasSession = undefined
+      }
+      const layout = ctx.get('layout') as {
+        readonly panelInfo: { getSnapshot: () => { activePanelId: string | null } }
+        readonly selectPanel: (id: string | null) => void
+      } | undefined
+      if (layout === undefined) return
+      const active = layout.panelInfo.getSnapshot().activePanelId
+      if (marked.has(session)) {
+        if (active !== CANVAS_PANEL_ID) layout.selectPanel(CANVAS_PANEL_ID)
+      } else if (active === CANVAS_PANEL_ID) {
+        // 切回普通会话时把布局还回去,否则会停在一个不属于它的画布上。
+        layout.selectPanel(null)
+      }
+    }, 400)
+    return () => { window.clearInterval(timer) }
+  }, 'landou: canvas layout follows the session')
+
   // ── 侧栏品牌名:无条件占用 ────────────────────────────────────────
   // 遮蔽机制:官方品牌插件 (ui-brand-official) 以默认优先级 0 占用同一 slot。
   // slot 的占用冲突**只在相同优先级上才抛错**,不同优先级是遮蔽关系,且
