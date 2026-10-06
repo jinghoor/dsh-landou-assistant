@@ -408,6 +408,15 @@ export function apply(ctx: ClientContext): void {
     order: 10,
     locale: NS,
     inject: () => ({
+      // 用户选了普通新会话 —— 撤销当前会话的画布标记。DSH 会复用那个空白会话,
+      // 它可能还带着上次的标记,不撤销的话"新会话"会开成画布。
+      forgetCanvasSession: () => {
+        const session = (ctx.get('uiSession') as { readonly mainRetainId?: string } | undefined)?.mainRetainId
+        if (session === undefined) return
+        const marked = readCanvasSessions()
+        if (!marked.delete(session)) return
+        writeCanvasSessions(marked)
+      },
       startCanvasSession: (workspaceId: string, startSession: () => void) => {
         // **先记待办再开会话。** DSH 会复用空白会话(id 不变),所以不能靠"新 id"判断;
         // 观察器按"点击那一刻的会话 + 一个短等待"收尾,两种情形都覆盖。

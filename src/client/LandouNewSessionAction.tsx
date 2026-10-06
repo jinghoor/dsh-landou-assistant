@@ -15,6 +15,7 @@
  * 这是 DSH 的硬规矩(业务组件看不到 ctx)。
  */
 import { MenuItemButton } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useEffect, useRef } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import { LandouCanvasIcon } from './LandouCanvasIcon.tsx'
 
@@ -26,6 +27,13 @@ export interface LandouNewSessionActionInjected {
    * @param startSession - 该行自己的新建会话动作,用的是同一条路。
    */
   startCanvasSession: (workspaceId: string, startSession: () => void) => void
+  /**
+   * 撤销当前会话的画布标记。
+   *
+   * 用户选了**普通**新会话时调用 —— DSH 会复用那个空白会话,而它可能还带着上次
+   * 画布会话的标记,不撤销的话"新会话"会开成画布。
+   */
+  forgetCanvasSession: () => void
 }
 
 /** 本行的全部 props。 */
@@ -34,6 +42,13 @@ export interface LandouNewSessionActionProps extends PropsLocale<'landou-assista
   workspaceId: string
   /** 该工作区自己的新建会话动作 —— 同一条路,不另开一条。 */
   startSession: () => void
+  /**
+   * 往这里登记"普通新会话被选中时该做什么"。
+   *
+   * 宿主在**同一个 tick 内**调用它 —— 早于菜单关闭和本组件卸载,所以是可靠的。
+   * 用计数传信号是不行的:选中会先关菜单,本组件随即卸载,变化读不到。
+   */
+  plainSessionSink: { current: (() => void) | undefined }
   /**
    * 关掉新会话菜单。
    *
@@ -49,7 +64,15 @@ export interface LandouNewSessionActionProps extends PropsLocale<'landou-assista
  * @param props - 侧栏宽度、开画布会话的动作与本地化文案。
  * @returns 与新会话按钮同一行的入口按钮。
  */
-export function LandouNewSessionAction({ workspaceId, startSession, startCanvasSession, closeMenu, t }: LandouNewSessionActionProps) {
+export function LandouNewSessionAction({
+  workspaceId, startSession, startCanvasSession, closeMenu, plainSessionSink, forgetCanvasSession, t,
+}: LandouNewSessionActionProps) {
+  // 菜单开着时把回调挂上去,关掉时摘掉 —— 摘掉是为了不在菜单关闭后还留着一个
+  // 指向已卸载组件的引用。
+  useEffect(() => {
+    plainSessionSink.current = forgetCanvasSession
+    return () => { plainSessionSink.current = undefined }
+  }, [plainSessionSink, forgetCanvasSession])
   return (
     <MenuItemButton
       icon={<LandouCanvasIcon size={16} />}
