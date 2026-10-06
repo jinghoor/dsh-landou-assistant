@@ -28,7 +28,6 @@ import { LandouCanvasBadge } from './LandouCanvasBadge.tsx'
 import { LandouCanvasBody } from './LandouCanvasBody.tsx'
 import { readSessionArtifacts } from './canvas-artifacts.ts'
 import { sessionFileAddress } from './file-address.ts'
-import { LandouCanvasIcon } from './LandouCanvasIcon.tsx'
 import { LandouCanvasPanel } from './LandouCanvasPanel.tsx'
 import { LandouLauncherItem } from './LandouLauncherItem.tsx'
 import { LandouNewSessionAction } from './LandouNewSessionAction.tsx'
@@ -110,13 +109,14 @@ export function apply(ctx: ClientContext): void {
     },
   }, LandouCanvasPanel))
 
-  ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
-    name: 'sidebar.panellist',
-    id: CANVAS_PANEL_ID,
-    order: 20,
-    locale: NS,
-    label: () => t('canvas.panel'),
-  }, LandouCanvasIcon))
+  // **刻意不注册 `sidebar.panellist`。**
+  //
+  // 侧栏上面那排行是从 `sidebar.panellist` 的条目生成的(ui-sidebar 的
+  // `entriesOfSlot('sidebar.panellist')`),不是从 `main` 的键。所以不注册就没有行 ——
+  // 而 `main` 面板照旧存在、照旧能被 `layout.selectPanel` 选中。
+  //
+  // 画布会话应当**和普通会话一样排在它所属的工作区下面**,而不是在侧栏上方多出一行
+  // 视图切换。这里少一行注册,正好就是那条要求。
 
   // ── 新建会话处的第二个入口 ────────────────────────────────────────
   // `sidebar.newsession.action` 渲染在新会话按钮**旁边**(不是下面那排面板导航:
@@ -128,10 +128,26 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     inject: () => ({
       startCanvasSession: () => {
-        // 顺序不能反:先开会话,再切面板。反过来的话新会话会落在普通对话面板里,
-        // 用户看到的是一个普通会话,以为按钮没生效。
-        ctx.uiWorkspace.startSession()
-        ctx.layout.selectPanel(CANVAS_PANEL_ID)
+        // **先切面板,再开会话。** 这个顺序是读 LayoutController.selectPanel 得到的,
+        // 不是猜的:`selectPanel` 第一件事就是 `this.navigation.abort()` —— 它会把
+        // **挂起中的导航**中止掉,而 startSession 的会话创建正是异步挂起的导航。
+        // 写成"先开会话再切面板"时,会话创建会被紧接着的 selectPanel 吃掉:
+        // 面板切过去了,会话没建 —— 症状是"按钮像没生效",而两行代码看起来都对。
+        // **用 ctx.get 而不是属性代理。** 仓库自己的 packages/AGENTS.md 写着:
+        // "Optional services use ctx.get(name) ... the property proxy is
+        // topology-sensitive, while strict ctx.get reads the global service store."
+        // 侧栏自己的 startSession 也是 ctx.get('uiWorkspace') —— 实测属性代理这条
+        // 路径上调用不生效(不报错,只是什么都没发生),症状极难查。
+        const workspace = ctx.get('uiWorkspace')
+        if (workspace === undefined) throw new Error('landou: uiWorkspace 服务不可用')
+        workspace.startSession()
+        // 切面板必须**等会话导航落定**再发。LayoutController.selectPanel 第一件事是
+        // `this.navigation.abort()` —— 它会中止挂起中的导航,而 startSession 的会话
+        // 创建正是异步挂起的导航。放在它前面会把创建吃掉(面板切了、会话没建),
+        // 放在它后面则会被会话导航把面板重置回对话。都不是猜的,是读 selectPanel
+        // 与 startSession 的实现得到的。
+        const layout = ctx.get('layout')
+        setTimeout(() => { layout?.selectPanel(CANVAS_PANEL_ID) }, 500)
       },
     }),
   }, LandouNewSessionAction))
