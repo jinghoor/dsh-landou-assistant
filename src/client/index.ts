@@ -275,6 +275,32 @@ export function apply(ctx: ClientContext): void {
   const t = ctx.locale.bind(NS)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'landou-assistant: dictionaries')
 
+  // ── 普通新会话不许继承画布标记 ────────────────────────────────────
+  // 每一次会话启动都经过 `uiWorkspace.startSession` 那个唯一漏斗,所以订阅它就能
+  // **覆盖全部路径**:工作区行菜单、侧栏顶部的全局「新会话」按钮、⌘N、以及别的插件。
+  //
+  // 为什么必须挂在这里、不能靠组件的回调:侧栏顶部按钮和 ⌘N 这两条路下,
+  // 本插件**没有任何组件挂载** —— 菜单没开,贡献项不在 DOM 里,回调没人调。
+  // 实测过一版"组件登记回调"的写法,它只堵住了工作区行那一条路。
+  //
+  // 判据是待办:点「画布会话」时会先设待办再 startSession,所以走到这里是
+  // "要去标记";没有待办就走到了这里,说明用户要的是**普通**会话 —— 而 DSH 会
+  // 复用那个空白会话,它可能还带着上次的标记,于是"新会话"开成了画布。
+  ctx.effect(() => {
+    const workspace = ctx.get('uiWorkspace') as {
+      readonly onSessionStart?: (listener: () => void) => () => void
+    } | undefined
+    if (workspace?.onSessionStart === undefined) return
+    return workspace.onSessionStart(() => {
+      if (pendingCanvasSession !== undefined) return
+      const session = (ctx.get('uiSession') as { readonly mainRetainId?: string } | undefined)?.mainRetainId
+      if (session === undefined) return
+      const marked = readCanvasSessions()
+      if (!marked.delete(session)) return
+      writeCanvasSessions(marked)
+    })
+  }, 'landou: a plain Session start is not a canvas Session')
+
   // ── 画布产物的刷新 ────────────────────────────────────────────────
   // 产物列表本身能同步读,但**预览 URL 不能** —— resources 是异步加载的。不轮询刷新
   // 的话图片节点会永远停在"预览不可用":数据后来到了,却没有东西让组件重渲染。
