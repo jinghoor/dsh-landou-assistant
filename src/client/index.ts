@@ -31,6 +31,7 @@ import { sessionFileAddress } from './file-address.ts'
 import { LandouCanvasIcon } from './LandouCanvasIcon.tsx'
 import { LandouCanvasPanel } from './LandouCanvasPanel.tsx'
 import { LandouLauncherItem } from './LandouLauncherItem.tsx'
+import { LandouNewSessionAction } from './LandouNewSessionAction.tsx'
 import { LandouSettingsSection } from './LandouSettingsSection.tsx'
 import { en, zh } from './locales.ts'
 import { getSession, login, logout, register, sendEmailCode } from './session.ts'
@@ -53,7 +54,7 @@ const LANDOU_SECTION_ID = 'landou-assistant'
 const CANVAS_PANEL_ID = 'landou-canvas'
 
 /** 必需服务:UI slot 注册表 + 本地化字典。 */
-export const inject = ['slots', 'locale', 'uiConversation', 'resources']
+export const inject = ['slots', 'locale', 'uiConversation', 'resources', 'layout', 'uiWorkspace']
 
 /**
  * 注册本插件的全部浏览器贡献。
@@ -116,6 +117,24 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     label: () => t('canvas.panel'),
   }, LandouCanvasIcon))
+
+  // ── 新建会话处的第二个入口 ────────────────────────────────────────
+  // `sidebar.newsession.action` 渲染在新会话按钮**旁边**(不是下面那排面板导航:
+  // 那是"切视图",这里是"怎么开一个新会话")。这个 slot 是本工作区的第三处上游改动。
+  ctx.slots.inject('sidebar.newsession.action', () => ctx.slots.register({
+    name: 'sidebar.newsession.action',
+    id: 'canvas-session',
+    order: 10,
+    locale: NS,
+    inject: () => ({
+      startCanvasSession: () => {
+        // 顺序不能反:先开会话,再切面板。反过来的话新会话会落在普通对话面板里,
+        // 用户看到的是一个普通会话,以为按钮没生效。
+        ctx.uiWorkspace.startSession()
+        ctx.layout.selectPanel(CANVAS_PANEL_ID)
+      },
+    }),
+  }, LandouNewSessionAction))
 
   // ── 画布主体 ──────────────────────────────────────────────────────
   // inject 闭包拿到的 ctx 与 entry 的 sessionId;主体据此读产物、算预览地址。
