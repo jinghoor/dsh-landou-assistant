@@ -112,6 +112,51 @@ function previewUrlFor(ctx: ClientContext, sessionId: string, path: string): str
   return `${LANDOU_ROUTE_PREFIX}/file?path=${encodeURIComponent(absoluteArtifactPath(ctx, sessionId, path))}`
 }
 
+/** 会被当作文字预览的扩展名。二进制文件也归 `text` 一类(分类的兜底),但不该去读它。 */
+const TEXTUAL_EXTENSIONS = new Set(['md', 'markdown', 'txt', 'json', 'csv', 'tsv', 'log', 'yaml', 'yml', 'toml', 'ini', 'html', 'css', 'js', 'ts', 'tsx', 'jsx', 'py', 'sh', 'rs', 'go', 'java', 'c', 'h', 'cpp'])
+
+/** 预览字符上限。节点是"一眼看到",不是阅读器。 */
+const PREVIEW_CHARS = 600
+
+/**
+ * 文字产物内容的缓存。
+ *
+ * 按**路径 + 预览 URL** 缓存而不是只按路径:URL 里带着路径,文件被改写后内容会变,
+ * 而这里没有版本号可用。简单起见缓存进程生命周期 —— 画布会话里同一路径的内容
+ * 在一次浏览中通常不变,真变了刷新页面即可。
+ */
+const previewCache = new Map<string, string | null>()
+
+/**
+ * 取文字产物的内容预览。
+ *
+ * 只对**已知是文字的扩展名**发请求:`text` 是分类的兜底类,一个 .zip 也会落到那里,
+ * 去读它只会拿到乱码。取不到就返回 null,节点退回只显示文件名。
+ * @param url - 该产物的预览 URL。
+ * @param path - 产物路径(用于判断扩展名)。
+ * @returns 预览文本;不适用或失败时为 null。
+ */
+async function loadTextPreview(url: string, path: string): Promise<string | null> {
+  const dot = path.lastIndexOf('.')
+  const extension = dot === -1 ? '' : path.slice(dot + 1).toLowerCase()
+  if (!TEXTUAL_EXTENSIONS.has(extension)) return null
+  const cached = previewCache.get(url)
+  if (cached !== undefined) return cached
+  let result: string | null = null
+  try {
+    const response = await fetch(url)
+    if (response.ok) {
+      const text = await response.text()
+      // 空文件是合法的文字产物,缓存空串而不是 null,免得每次都去重取。
+      result = text.slice(0, PREVIEW_CHARS)
+    }
+  } catch (_error) {
+    result = null
+  }
+  previewCache.set(url, result)
+  return result
+}
+
 /**
  * 取会话的工作区根。
  * @param ctx - 插件上下文。
@@ -259,10 +304,11 @@ export function apply(ctx: ClientContext): void {
     const timer = window.setInterval(() => {
       const sessionId = (ctx.get('uiSession') as { readonly mainRetainId?: string } | undefined)?.mainRetainId
       if (sessionId === undefined) { canvas.publish([]); return }
-      canvas.publish(readSessionArtifacts(ctx.get('uiConversation'), sessionId).map((artifact) => ({
-        artifact,
-        url: previewUrlFor(ctx, sessionId, artifact.path),
-      })))
+      const artifacts = readSessionArtifacts(ctx.get('uiConversation'), sessionId)
+      void Promise.all(artifacts.map(async (artifact) => {
+        const url = previewUrlFor(ctx, sessionId, artifact.path)
+        return { artifact, url, preview: await loadTextPreview(url, artifact.path) }
+      })).then((nodes) => { canvas.publish(nodes) })
     }, 800)
     return () => { window.clearInterval(timer) }
   }, 'landou: canvas artifacts')

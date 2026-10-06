@@ -114,12 +114,17 @@ function VideoNode({ artifact, url, t }: { artifact: Artifact; url: string | nul
 
 /**
  * 渲染一个文字节点。
- * @param props - 产物。
- * @returns 文件卡片。
+ *
+ * 有内容预览时以内容为主、文件名为辅 —— 文字产物的信息全在内容里,只写文件名
+ * 等于什么都没说。预览按等宽字体呈现并限高,因为它的用途是"一眼认出来",
+ * 不是阅读;超出部分`overflow: hidden` 裁掉而不是省略号,免得看起来像内容就这么多。
+ * @param props - 产物与已取到的内容预览。
+ * @returns 文字卡片。
  */
-function TextNode({ artifact }: { artifact: Artifact }) {
+function TextNode({ artifact, preview }: { artifact: Artifact; preview?: string | null }) {
+  const hasBody = typeof preview === 'string' && preview.trim() !== ''
   return (
-    <div style={{ ...NODE_STYLE, padding: 10, gap: 6 }} data-landou-node="text" data-landou-path={artifact.path} title={artifact.path}>
+    <div style={{ ...NODE_STYLE, padding: 10, gap: 8 }} data-landou-node="text" data-landou-path={artifact.path} title={artifact.path}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
         <span
           aria-hidden="true"
@@ -129,9 +134,9 @@ function TextNode({ artifact }: { artifact: Artifact }) {
         </span>
         <span style={{ fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{artifact.name}</span>
       </div>
-      <span style={{ fontSize: 11, opacity: 0.45, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', direction: 'rtl', textAlign: 'left' }}>
-        {artifact.path}
-      </span>
+      {hasBody
+        ? <pre style={{ margin: 0, fontSize: 11, lineHeight: 1.5, opacity: 0.8, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 132, overflow: 'hidden', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{preview}</pre>
+        : <span style={{ fontSize: 11, opacity: 0.45, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', direction: 'rtl', textAlign: 'left' }}>{artifact.path}</span>}
     </div>
   )
 }
@@ -163,7 +168,7 @@ export function LandouCanvasBody(props: LandouCanvasBodyProps) {
         const { artifact, url } = node
         if (artifact.kind === 'image') return <ImageNode key={artifact.path} artifact={artifact} url={url} t={t} />
         if (artifact.kind === 'video') return <VideoNode key={artifact.path} artifact={artifact} url={url} t={t} />
-        return <TextNode key={artifact.path} artifact={artifact} />
+        return <TextNode key={artifact.path} artifact={artifact} preview={node.preview} />
       })}
     </div>
   )

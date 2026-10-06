@@ -28,6 +28,13 @@ export interface CanvasNode {
   readonly artifact: Artifact
   /** 浏览器能加载的 URL;拿不到时为 null,节点显示占位。 */
   readonly url: string | null
+  /**
+   * 文字产物的内容预览;非文字产物或还没取到时为 null。
+   *
+   * 文字节点只写文件名等于什么都没说 —— 画布的价值是"一眼看到产物是什么",
+   * 而一个 .md 的信息全在内容里。
+   */
+  readonly preview?: string | null
 }
 
 /** 裸可观察量:渲染器绑成 `use<Name>` 所需的最小接口。 */
@@ -57,6 +64,7 @@ export function createCanvasSource(): {
     && left.artifact.kind === right.artifact.kind
     && left.artifact.name === right.artifact.name
     && left.url === right.url
+    && left.preview === right.preview
 
   return {
     source: {
