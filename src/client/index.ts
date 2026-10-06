@@ -203,17 +203,14 @@ function openArtifact(ctx: ClientContext, sessionId: string, path: string, url: 
       readonly toggleExpanded?: () => void
     } | undefined
     if (sidebarRight?.openResource !== undefined) {
-      // **右栏收起时必须先展开。** `openResource` 写的是"当前已挂载的那个会话面"
-      // (`service.ts` 的 `require()` 读 `this.mounted`),而 `RightbarSeat` 只在展开时
-      // 才为会话开面 —— 实测收起时 `mounted: null`、`isExpanded: false`,于是它抛
-      // `no session surface is mounted`。展开与挂载之间隔一拍,所以打开要延后。
-      if (sidebarRight.isExpanded?.() === false && sidebarRight.toggleExpanded !== undefined) {
-        sidebarRight.toggleExpanded()
-        window.setTimeout(() => {
-          try { sidebarRight.openResource?.(address) } catch (_error) { /* 交给下面那次点击的兜底 */ }
-        }, 350)
-        return
-      }
+      // **不用 `toggleExpanded()` 去开那个面 —— 它也抛同一个错。**
+      // 实测:右栏收起时 `mounted: null`、`isExpanded: false`,而
+      // `toggleExpanded()` 与 `openResource()` 都走 `require()`,都读 `this.mounted`,
+      // 于是互为前提:没有面就展不开,展不开就没有面。**插件侧打不破这个循环** ——
+      // 面是由 `RightbarSeat` 在 `active` 时自己开的,`active` 由外壳决定。
+      //
+      // 所以这里只试一次:成,就给用户官方的文档面板;败,就走下面的导航兜底。
+      // 不再假装能展开 —— 那条路经实测不存在。
       sidebarRight.openResource(address)
       return
     }
