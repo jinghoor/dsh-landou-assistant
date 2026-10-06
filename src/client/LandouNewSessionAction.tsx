@@ -20,12 +20,20 @@ import { LandouCanvasIcon } from './LandouCanvasIcon.tsx'
 
 /** 本行需要的能力。 */
 export interface LandouNewSessionActionInjected {
-  /** 开一个新会话并把主面板切到画布。 */
-  startCanvasSession: () => void
+  /**
+   * 在该工作区里开一个新会话,并把它记成画布会话。
+   * @param workspaceId - 目标工作区。
+   * @param startSession - 该行自己的新建会话动作,用的是同一条路。
+   */
+  startCanvasSession: (workspaceId: string, startSession: () => void) => void
 }
 
 /** 本行的全部 props。 */
 export interface LandouNewSessionActionProps extends PropsLocale<'landou-assistant'>, LandouNewSessionActionInjected {
+  /** 这一行属于哪个工作区。 */
+  workspaceId: string
+  /** 该工作区自己的新建会话动作 —— 同一条路,不另开一条。 */
+  startSession: () => void
   /**
    * 关掉新会话菜单。
    *
@@ -41,14 +49,14 @@ export interface LandouNewSessionActionProps extends PropsLocale<'landou-assista
  * @param props - 侧栏宽度、开画布会话的动作与本地化文案。
  * @returns 与新会话按钮同一行的入口按钮。
  */
-export function LandouNewSessionAction({ startCanvasSession, closeMenu, t }: LandouNewSessionActionProps) {
+export function LandouNewSessionAction({ workspaceId, startSession, startCanvasSession, closeMenu, t }: LandouNewSessionActionProps) {
   return (
     <MenuItemButton
       icon={<LandouCanvasIcon size={16} />}
       onSelect={() => {
         // 先关菜单:它是 portal 出去的浮层,留着会盖在新会话上。
         closeMenu()
-        startCanvasSession()
+        startCanvasSession(workspaceId, startSession)
       }}
     >
       {t('canvas.panel')}

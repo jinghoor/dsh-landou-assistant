@@ -309,105 +309,31 @@ export function apply(ctx: ClientContext): void {
   // 画布会话应当**和普通会话一样排在它所属的工作区下面**,而不是在侧栏上方多出一行
   // 视图切换。这里少一行注册,正好就是那条要求。
 
-  // ── 新建会话处的第二个入口 ────────────────────────────────────────
-  // `sidebar.newsession.action` 渲染在新会话按钮**旁边**(不是下面那排面板导航:
-  // 那是"切视图",这里是"怎么开一个新会话")。这个 slot 是本工作区的第三处上游改动。
-  ctx.slots.inject('sidebar.newsession.action', () => ctx.slots.register({
-    name: 'sidebar.newsession.action',
+  // ── 工作区行上的「画布会话」 ──────────────────────────────────────
+  // 挂在**工作区那一行的「+」**上(`sidebar.workspaces.newsession.item`),不在侧栏上方的
+  // 全局「新会话」里。位置是有意义的:画布会话就是**这个工作区**里的一个普通会话,
+  // 它会像其它会话一样排在该工作区下面 —— 那么"新建它"的入口就该和"在该工作区新建会话"
+  // 在一起,而不是在管所有工作区的全局按钮上。
+  //
+  // 这个 slot 是本工作区的第四处上游改动;那个「+」在有贡献项时变成菜单。
+  ctx.slots.inject('sidebar.workspaces.newsession.item', () => ctx.slots.register({
+    name: 'sidebar.workspaces.newsession.item',
     id: 'canvas-session',
     order: 10,
     locale: NS,
     inject: () => ({
-      startCanvasSession: () => {
-        // **先切面板,再开会话。** 这个顺序是读 LayoutController.selectPanel 得到的,
-        // 不是猜的:`selectPanel` 第一件事就是 `this.navigation.abort()` —— 它会把
-        // **挂起中的导航**中止掉,而 startSession 的会话创建正是异步挂起的导航。
-        // 写成"先开会话再切面板"时,会话创建会被紧接着的 selectPanel 吃掉:
-        // 面板切过去了,会话没建 —— 症状是"按钮像没生效",而两行代码看起来都对。
-        // **用 ctx.get 而不是属性代理。** 仓库自己的 packages/AGENTS.md 写着:
-        // "Optional services use ctx.get(name) ... the property proxy is
-        // topology-sensitive, while strict ctx.get reads the global service store."
-        // 侧栏自己的 startSession 也是 ctx.get('uiWorkspace') —— 实测属性代理这条
-        // 路径上调用不生效(不报错,只是什么都没发生),症状极难查。
-        const workspace = ctx.get('uiWorkspace')
-        if (workspace === undefined) throw new Error('landou: uiWorkspace 服务不可用')
-        // 只标一个待办:**当前会话一换,下面的观察器就把它记成画布会话并切布局**。
-        //
-        // 之前这里是"startSession() 之后延后 500ms 再 selectPanel"。那是在绕开一个
-        // 真实约束(LayoutController.selectPanel 第一件事是 navigation.abort(),
-        // 会中止挂起中的会话创建导航),但绕法靠的是猜一个延时。现在改成状态驱动:
-        // 谁都不用等谁,也就不存在顺序问题。
+      startCanvasSession: (workspaceId: string, startSession: () => void) => {
+        // **先记待办再开会话。** DSH 会复用空白会话(id 不变),所以不能靠"新 id"判断;
+        // 观察器按"点击那一刻的会话 + 一个短等待"收尾,两种情形都覆盖。
         pendingCanvasSession = {
           before: (ctx.get('uiSession') as { readonly mainRetainId?: string } | undefined)?.mainRetainId ?? '',
           at: Date.now(),
         }
-        workspace.startSession()
+        startSession()
+        void workspaceId
       },
     }),
   }, LandouNewSessionAction))
-
-  // ── 画布产物的刷新 ────────────────────────────────────────────────
-  // 产物列表本身能同步读,但**预览 URL 不能** —— resources 是异步加载的,
-  // 第一次读必然为空。不轮询刷新的话图片节点会永远停在"预览不可用":
-  // 数据后来到了,却没有任何东西让组件重渲染。
-  //
-  // 800ms:产物是低频事件,快没必要;而比"猜一个订阅接口"可靠得多。
-  ctx.effect(() => {
-    const timer = window.setInterval(() => {
-      const sessionId = (ctx.get('uiSession') as { readonly mainRetainId?: string } | undefined)?.mainRetainId
-      if (sessionId === undefined) { canvas.publish([]); return }
-      const artifacts = readSessionArtifacts(ctx.get('uiConversation'), sessionId)
-      void Promise.all(artifacts.map(async (artifact) => {
-        const url = previewUrlFor(ctx, sessionId, artifact.path)
-        return { artifact, url, preview: await loadTextPreview(url, artifact.path) }
-      })).then((nodes) => { canvas.publish(nodes) })
-    }, 800)
-    return () => { window.clearInterval(timer) }
-  }, 'landou: canvas artifacts')
-
-  // ── 画布会话的布局跟随 ────────────────────────────────────────────
-  // 当前会话一换就决定用哪个布局:是画布会话就切到画布面板,不是就切回对话。
-  // 这让"画布会话"成为**会话自身的属性**,而不是一次性的界面动作 ——
-  // 重载、从会话列表点回来、切到别的会话,行为都一致。
-  //
-  // 用轮询而不是订阅:`uiSession.mainRetainId` 是个普通字符串字段,不是可观察量
-  // (实测;`uiSession.current` 那个可观察量给的是绑定源,不含会话 id)。
-  // 400ms 的代价可以忽略,而它换来的是"不用去猜一个订阅接口"。
-  ctx.effect(() => {
-    let lastSession = ''
-    const timer = window.setInterval(() => {
-      const session = (ctx.get('uiSession') as { readonly mainRetainId?: string } | undefined)?.mainRetainId
-      if (session === undefined) return
-      const changed = session !== lastSession
-      lastSession = session
-      // **每次轮询都要做决定,不能只在会话变化时做。** 早先这里是边沿触发
-      // (只在 id 变了才评估),后果是:人已经待在某个会话里、标记之后才写入时,
-      // 布局永远不会被重新评估 —— 实测症状是"标记写进去了,面板没切"。
-      // 电平触发(每次都算一遍期望布局,和现状不符就纠正)同时覆盖了会话切换、
-      // 重载恢复、以及标记后到这三种情形,不需要各自的特例。
-      const pending = pendingCanvasSession
-      // 已经有新会话了 → 立刻收尾;还没变的话等一小会儿再收,给复用那条路留出判定时间。
-      const settled = pending !== undefined && (changed || Date.now() - pending.at > 1200)
-      const marked = readCanvasSessions()
-      if (pending !== undefined && settled) {
-        pendingCanvasSession = undefined
-        marked.add(session)
-        writeCanvasSessions(marked)
-      } else if (pending !== undefined && Date.now() - pending.at > 8000) {
-        // 迟迟收不了尾就丢掉,免得一个陈旧待办日后标记一个无关会话。
-        pendingCanvasSession = undefined
-      }
-      const layout = ctx.get('layout')
-      if (layout === undefined) return
-      if (marked.has(session)) {
-        if (layout.panelInfo.getSnapshot().activePanelId !== CANVAS_PANEL_ID) layout.selectPanel(CANVAS_PANEL_ID)
-      } else if (layout.panelInfo.getSnapshot().activePanelId === CANVAS_PANEL_ID) {
-        // 切回普通会话时把布局还回去,否则会停在一个不属于它的画布上。
-        layout.selectPanel(null)
-      }
-    }, 400)
-    return () => { window.clearInterval(timer) }
-  }, 'landou: canvas session layout follows the session')
 
   // ── 画布主体 ──────────────────────────────────────────────────────
   // inject 闭包拿到的 ctx 与 entry 的 sessionId;主体据此读产物、算预览地址。
