@@ -1,8 +1,11 @@
 /**
  * 「画布会话」—— 新建会话处的第二个入口。
  *
- * 放在 `sidebar.newsession.action` 里,它渲染在**新会话按钮旁边**,而不是下面那排
- * 面板导航里:面板导航是"切到哪个视图",这里是"怎么开一个新会话",读起来不该混。
+ * 放在 `sidebar.newsession.action` 里。「新会话」按钮在有贡献项时会变成菜单,
+ * 本行就是菜单里的一项 —— **不是侧栏上一行独立按钮**。
+ *
+ * 这一点是刻意的:画布会话就是一个普通会话,它会像其它会话一样排在所属工作区
+ * 的下面,所以不该在侧栏上方再占一行。
  *
  * 本行做两件事,顺序不能反:
  *   1. `startSession()` —— 走侧栏自己那个按钮的同一条路,拿到一个新会话
@@ -11,6 +14,7 @@
  * 合成一个 `startCanvasSession` 由注册处注入,而不是让组件自己拼:组件拿不到 ctx,
  * 这是 DSH 的硬规矩(业务组件看不到 ctx)。
  */
+import { MenuItemButton } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import { LandouCanvasIcon } from './LandouCanvasIcon.tsx'
 
@@ -22,8 +26,14 @@ export interface LandouNewSessionActionInjected {
 
 /** 本行的全部 props。 */
 export interface LandouNewSessionActionProps extends PropsLocale<'landou-assistant'>, LandouNewSessionActionInjected {
-  /** 侧栏是否展开;收起时只渲染图标。 */
-  wide: boolean
+  /**
+   * 关掉新会话菜单。
+   *
+   * 本行渲染在「新会话」按钮弹出的**菜单里**(见 ui-sidebar 的 `sidebar.newsession.action`),
+   * 不是侧栏上一行独立按钮 —— 画布会话就是一个普通会话,它会像其它会话一样排在所属
+   * 工作区下面,不需要在上面多占一行。
+   */
+  closeMenu: () => void
 }
 
 /**
@@ -31,35 +41,17 @@ export interface LandouNewSessionActionProps extends PropsLocale<'landou-assista
  * @param props - 侧栏宽度、开画布会话的动作与本地化文案。
  * @returns 与新会话按钮同一行的入口按钮。
  */
-export function LandouNewSessionAction({ wide, startCanvasSession, t }: LandouNewSessionActionProps) {
-  const label = t('canvas.panel')
+export function LandouNewSessionAction({ startCanvasSession, closeMenu, t }: LandouNewSessionActionProps) {
   return (
-    <button
-      type="button"
-      data-landou-newsession="canvas"
-      aria-label={label}
-      title={label}
-      onClick={() => { startCanvasSession() }}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        width: '100%',
-        // 与侧栏自己的新会话按钮同一套视觉:同一层级的动作不该长得不一样。
-        padding: wide ? '6px 10px' : '6px',
-        justifyContent: wide ? 'flex-start' : 'center',
-        border: '1px solid color-mix(in srgb, currentColor 12%, transparent)',
-        borderRadius: 8,
-        background: 'transparent',
-        color: 'inherit',
-        font: 'inherit',
-        fontSize: 13,
-        cursor: 'pointer',
-        whiteSpace: 'nowrap',
+    <MenuItemButton
+      icon={<LandouCanvasIcon size={16} />}
+      onSelect={() => {
+        // 先关菜单:它是 portal 出去的浮层,留着会盖在新会话上。
+        closeMenu()
+        startCanvasSession()
       }}
     >
-      <LandouCanvasIcon size={14} />
-      {wide && <span>{label}</span>}
-    </button>
+      {t('canvas.panel')}
+    </MenuItemButton>
   )
 }

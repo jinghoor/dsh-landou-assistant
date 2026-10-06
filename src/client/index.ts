@@ -109,6 +109,8 @@ export function apply(ctx: ClientContext): void {
     },
   }, LandouCanvasPanel))
 
+  // **这一项渲染在「新会话」按钮弹出的菜单里**,不是侧栏上一行独立按钮。
+  //
   // **刻意不注册 `sidebar.panellist`。**
   //
   // 侧栏上面那排行是从 `sidebar.panellist` 的条目生成的(ui-sidebar 的
