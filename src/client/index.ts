@@ -215,49 +215,21 @@ function workspaceRootOf(ctx: ClientContext, sessionId: string): string | undefi
 }
 
 /**
- * 在 DSH 的右侧文档面板里打开一个产物。
+ * 把一个产物在浏览器里打开。
  *
- * 走官方入口 `sidebarRight.openResource(地址)` —— `ui-reference` 就是这么做的。
- * 地址用 **session 作用域**(`dsh-resource://file/session/<id>/<相对路径>`):
- * 宿主按该会话自己持有的 workspace root 解析,与预览字节那条路由同一套隔离。
+ * **不再嘗試 DSH 的右侧文档面板。** 画布面板没有挂载那个面板的会话面:
+ * `openResource` 与 `toggleExpanded` 都走同一个 `require()`,读同一个 `this.mounted`,
+ * 实测在画布里必然抛 `no session surface is mounted`,而且两者互为前提、插件侧打不破。
  *
- * 服务缺席或打不开时退回在新窗口里打开插件自己的预览路由 —— 那至少能让用户看到东西,
- * 而节点点了毫无反应是最差的。
- * @param ctx - 插件上下文。
- * @param sessionId - 会话。
- * @param path - 产物路径。
- * @param url - 插件预览路由的 URL,作为兜底。
+ * 更要紧的是**那个面板本来就不需要**:画布已经把产物完整显示了 —— 图片全尺寸、
+ * 视频可直接播放、文字就地展开。所以这里不再"先试一次注定失败的调用、再靠 catch 兜底",
+ * 那只会让每个用户点一下都先失败一次。
+ * @param url - 插件预览路由的 URL。
  * @returns 无。
  */
-function openArtifact(ctx: ClientContext, sessionId: string, path: string, url: string): void {
-  const root = workspaceRootOf(ctx, sessionId)
-  const relative = root !== undefined && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path
-  const address = sessionFileAddress(sessionId, relative)
-  try {
-    const sidebarRight = ctx.get('sidebarRight') as {
-      readonly openResource?: (address: string) => void
-      readonly isExpanded?: () => boolean
-      readonly toggleExpanded?: () => void
-    } | undefined
-    if (sidebarRight?.openResource !== undefined) {
-      // **不用 `toggleExpanded()` 去开那个面 —— 它也抛同一个错。**
-      // 实测:右栏收起时 `mounted: null`、`isExpanded: false`,而
-      // `toggleExpanded()` 与 `openResource()` 都走 `require()`,都读 `this.mounted`,
-      // 于是互为前提:没有面就展不开,展不开就没有面。**插件侧打不破这个循环** ——
-      // 面是由 `RightbarSeat` 在 `active` 时自己开的,`active` 由外壳决定。
-      //
-      // 所以这里只试一次:成,就给用户官方的文档面板;败,就走下面的导航兜底。
-      // 不再假装能展开 —— 那条路经实测不存在。
-      sidebarRight.openResource(address)
-      return
-    }
-  } catch (_error) {
-    // 落下去用兜底,不要在这里吞掉用户的点击。
-  }
-  // **兜底用 `<a target="_blank">` 的程序化点击,不用 `window.open`。**
-  // `window.open` 会被弹窗拦截器吞掉(实测:点了毫无反应,而 `openResource` 抛的
-  // "no session surface is mounted" 被 catch 吃掉,于是两条路都无声失败)。
-  // 锚点点击走的是导航而不是弹窗,不受同一套拦截。
+function openArtifact(url: string): void {
+  // 用 `<a target="_blank">` 的程序化点击而不是 `window.open`:后者会被弹窗拦截器吞掉
+  // (实测:点了毫无反应),锚点点击走导航,不受同一套拦截。
   try {
     const link = document.createElement('a')
     link.href = url
@@ -268,7 +240,7 @@ function openArtifact(ctx: ClientContext, sessionId: string, path: string, url: 
     link.remove()
   } catch (_error) {
     // 走到这里说明连导航都发不出去。节点本来的作用是把产物显示出来,那件事已经做完了,
-    // 所以这里不再往上抛 —— 但也不假装成功。
+    // 所以不再往上抛 —— 但也不假装成功。
   }
 }
 
@@ -531,7 +503,7 @@ export function apply(ctx: ClientContext): void {
     inject: (sessionId: string) => ({
       hooks: { artifacts: canvas.source },
       // 注册处注入而不是让组件自己取 ctx:业务组件看不到 ctx,这是 DSH 的硬规矩。
-      openArtifact: (path: string, url: string) => { openArtifact(ctx, sessionId, path, url) },
+      openArtifact: (path: string, url: string) => { void path; openArtifact(url) },
     }),
   }, LandouCanvasBody))
 
