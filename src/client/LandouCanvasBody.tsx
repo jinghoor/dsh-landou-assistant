@@ -19,14 +19,18 @@
  */
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { Artifact } from './artifacts.ts'
+import type { CanvasNode } from './canvas-store.ts'
 import { LandouMark } from './LandouMark.tsx'
 
 /** 本组件从注册时的 inject 闭包拿到的能力。 */
 export interface LandouCanvasBodyInjected {
-  /** 读当前会话的产物。每次渲染时调用,不做缓存。 */
-  readArtifacts: () => readonly Artifact[]
-  /** 把一个磁盘路径变成浏览器能加载的 URL;拿不到时返回 null。 */
-  resolvePreviewUrl: (path: string) => string | null
+  /**
+   * 产物节点来源。
+   *
+   * 由注册时的 `hooks` 隔间绑定成 `useArtifacts` —— 业务组件不得自带订阅机制,
+   * 而预览 URL 是异步到的,不订阅就永远看不到图。
+   */
+  useArtifacts: (select: (nodes: readonly CanvasNode[]) => readonly CanvasNode[]) => readonly CanvasNode[]
 }
 
 /** 本组件需要的全部 props。 */
@@ -34,6 +38,28 @@ export interface LandouCanvasBodyProps extends PropsLocale<'landou-assistant'>, 
   /** 当前会话 id;无会话时为 undefined。 */
   sessionId?: string
 }
+
+/**
+ * 画布网格:按类型自动排版。
+ *
+ * `auto-fill` + `minmax` 让列数随画布宽度自动定,`dense` 让大小不一的格子回填空洞
+ * (没有它,一个跨两列的图片后面会留下一个永远填不上的缺口)。
+ *
+ * 尺寸按类型分:图片和视频是"看"的,给两列;文字是"认"的,一列足够。
+ * 这样一屏里视觉重心自然落在图上,而不需要谁去指定位置 —— 手动摆位在产物
+ * 陆续到来时会不断失效。
+ */
+const GRID_STYLE: Record<string, string | number> = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+  gridAutoFlow: 'dense',
+  gap: 12,
+  padding: 12,
+  alignContent: 'start',
+}
+
+/** 图片与视频占两列;文字一列。 */
+const WIDE_SPAN = { gridColumn: 'span 2' } as const
 
 /** 节点统一的卡片样式。 */
 const NODE_STYLE: Record<string, string | number> = {
@@ -53,7 +79,7 @@ const NODE_STYLE: Record<string, string | number> = {
  */
 function ImageNode({ artifact, url, t }: { artifact: Artifact; url: string | null; t: LandouCanvasBodyProps['t'] }) {
   return (
-    <figure style={{ ...NODE_STYLE, margin: 0 }} data-landou-node="image" data-landou-path={artifact.path} title={artifact.path}>
+    <figure style={{ ...NODE_STYLE, ...WIDE_SPAN, margin: 0 }} data-landou-node="image" data-landou-path={artifact.path} title={artifact.path}>
       <div style={{ aspectRatio: '4 / 3', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
         {url === null
           ? <span style={{ fontSize: 11, opacity: 0.45, padding: 8, textAlign: 'center' }}>{t('canvas.noPreview')}</span>
@@ -73,7 +99,7 @@ function ImageNode({ artifact, url, t }: { artifact: Artifact; url: string | nul
  */
 function VideoNode({ artifact, url, t }: { artifact: Artifact; url: string | null; t: LandouCanvasBodyProps['t'] }) {
   return (
-    <figure style={{ ...NODE_STYLE, margin: 0 }} data-landou-node="video" data-landou-path={artifact.path} title={artifact.path}>
+    <figure style={{ ...NODE_STYLE, ...WIDE_SPAN, margin: 0 }} data-landou-node="video" data-landou-path={artifact.path} title={artifact.path}>
       <div style={{ aspectRatio: '16 / 9', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', background: '#000' }}>
         {url === null
           ? <span style={{ fontSize: 11, opacity: 0.45, color: '#fff' }}>{t('canvas.noPreview')}</span>
@@ -116,10 +142,10 @@ function TextNode({ artifact }: { artifact: Artifact }) {
  * @returns 节点网格,或空状态。
  */
 export function LandouCanvasBody(props: LandouCanvasBodyProps) {
-  const { readArtifacts, resolvePreviewUrl, t } = props
-  const artifacts = readArtifacts()
+  const { useArtifacts, t } = props
+  const nodes = useArtifacts(all => all)
 
-  if (artifacts.length === 0) {
+  if (nodes.length === 0) {
     return (
       <div
         data-landou-canvas-empty=""
@@ -132,13 +158,11 @@ export function LandouCanvasBody(props: LandouCanvasBodyProps) {
   }
 
   return (
-    <div
-      data-landou-canvas-grid=""
-      style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12, padding: 12, alignContent: 'start' }}
-    >
-      {artifacts.map((artifact) => {
-        if (artifact.kind === 'image') return <ImageNode key={artifact.path} artifact={artifact} url={resolvePreviewUrl(artifact.path)} t={t} />
-        if (artifact.kind === 'video') return <VideoNode key={artifact.path} artifact={artifact} url={resolvePreviewUrl(artifact.path)} t={t} />
+    <div data-landou-canvas-grid="" style={GRID_STYLE}>
+      {nodes.map((node) => {
+        const { artifact, url } = node
+        if (artifact.kind === 'image') return <ImageNode key={artifact.path} artifact={artifact} url={url} t={t} />
+        if (artifact.kind === 'video') return <VideoNode key={artifact.path} artifact={artifact} url={url} t={t} />
         return <TextNode key={artifact.path} artifact={artifact} />
       })}
     </div>

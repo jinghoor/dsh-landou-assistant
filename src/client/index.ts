@@ -27,6 +27,7 @@ import { LandouBrandName } from './LandouBrandName.tsx'
 import { LandouCanvasBadge } from './LandouCanvasBadge.tsx'
 import { LandouCanvasBody } from './LandouCanvasBody.tsx'
 import { readSessionArtifacts } from './canvas-artifacts.ts'
+import { createCanvasSource } from './canvas-store.ts'
 import { sessionFileAddress } from './file-address.ts'
 import { LandouCanvasPanel } from './LandouCanvasPanel.tsx'
 import { LandouLauncherItem } from './LandouLauncherItem.tsx'
@@ -88,9 +89,66 @@ export const inject = ['slots', 'locale', 'uiConversation', 'resources', 'layout
  * 注册本插件的全部浏览器贡献。
  * @param ctx - 浏览器根上下文。
  */
+/**
+ * 把绝对路径变成相对会话工作区的路径。
+ *
+ * 不在工作区下(或拿不到 cwd)时原样返回 —— 那种路径本来就无法通过会话资源读,
+ * 让它照原样失败比悄悄指向别的文件好。
+ * @param ctx - 插件上下文。
+ * @param sessionId - 会话。
+ * @param path - 产物路径。
+ * @returns 相对路径,或原路径。
+ */
+function relativeToWorkspace(ctx: ClientContext, sessionId: string, path: string): string {
+  try {
+    const sessions = (ctx.get('uiConversation') as { readonly sessions?: unknown } | undefined)?.sessions as
+      { readonly list?: { getSnapshot: () => { byId?: Record<string, { cwd?: string } | undefined> } } } | undefined
+    const cwd = sessions?.list?.getSnapshot().byId?.[sessionId]?.cwd
+    if (typeof cwd !== 'string' || cwd === '') return path
+    const root = cwd.replace(/[/\\]+$/u, '')
+    return path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path
+  } catch (_error) {
+    return path
+  }
+}
+
+/**
+ * 把一个磁盘路径变成浏览器能加载的 URL。
+ *
+ * 走 **session 作用域**地址:宿主按该会话自己持有的 workspace root 解析 ——
+ * 工作区隔离就执行在这一步,而 `absolute` 作用域会绕开它。
+ *
+ * `pin` 触发加载,`source(...).getSnapshot()` 拿当前值。第一次调用拿不到是正常的,
+ * 上层轮询会再读 —— 所以这里返回 null 而不是抛错。
+ * @param ctx - 插件上下文。
+ * @param sessionId - 解析该路径的会话。
+ * @param path - 产物路径。
+ * @returns 可加载的 URL;尚未就绪或服务不可用时返回 null。
+ */
+function previewUrlFor(ctx: ClientContext, sessionId: string, path: string): string | null {
+  try {
+    const resources = ctx.get('resources') as {
+      readonly pin: (address: string, signal: AbortSignal) => void
+      readonly source: (address: string) => { getSnapshot: () => { value?: { url?: string } } }
+    } | undefined
+    if (resources === undefined) return null
+    // **必须相对工作区。** 实测:session 作用域地址里放绝对路径,状态永远停在
+    // "loading"(不报错、不失败,就是不落地);放相对路径立刻是 "live"。
+    // 宿主按该会话自己持有的 workspace root 解析相对路径 —— 工作区隔离也正落在这一步。
+    const address = sessionFileAddress(sessionId, relativeToWorkspace(ctx, sessionId, path))
+    resources.pin(address, new AbortController().signal)
+    const value = resources.source(address).getSnapshot().value
+    return typeof value?.url === 'string' ? value.url : null
+  } catch (_error) {
+    return null
+  }
+}
+
 export function apply(ctx: ClientContext): void {
   /** 「画布会话」被点过、但新会话还没落地 —— 落地时把它记成画布会话。 */
   let pendingCanvasSession = false
+  /** 画布产物的响应式来源;下面那个轮询负责刷新它,画布主体通过 hooks 隔间消费。 */
+  const canvas = createCanvasSource()
   const t = ctx.locale.bind(NS)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'landou-assistant: dictionaries')
 
@@ -185,6 +243,24 @@ export function apply(ctx: ClientContext): void {
     }),
   }, LandouNewSessionAction))
 
+  // ── 画布产物的刷新 ────────────────────────────────────────────────
+  // 产物列表本身能同步读,但**预览 URL 不能** —— resources 是异步加载的,
+  // 第一次读必然为空。不轮询刷新的话图片节点会永远停在"预览不可用":
+  // 数据后来到了,却没有任何东西让组件重渲染。
+  //
+  // 800ms:产物是低频事件,快没必要;而比"猜一个订阅接口"可靠得多。
+  ctx.effect(() => {
+    const timer = window.setInterval(() => {
+      const sessionId = (ctx.get('uiSession') as { readonly mainRetainId?: string } | undefined)?.mainRetainId
+      if (sessionId === undefined) { canvas.publish([]); return }
+      canvas.publish(readSessionArtifacts(ctx.get('uiConversation'), sessionId).map((artifact) => ({
+        artifact,
+        url: previewUrlFor(ctx, sessionId, artifact.path),
+      })))
+    }, 800)
+    return () => { window.clearInterval(timer) }
+  }, 'landou: canvas artifacts')
+
   // ── 画布会话的布局跟随 ────────────────────────────────────────────
   // 当前会话一换就决定用哪个布局:是画布会话就切到画布面板,不是就切回对话。
   // 这让"画布会话"成为**会话自身的属性**,而不是一次性的界面动作 ——
@@ -228,21 +304,12 @@ export function apply(ctx: ClientContext): void {
     name: 'landou.canvas.body',
     id: 'canvas-body',
     locale: NS,
-    inject: (sessionId) => ({
-      readArtifacts: () => readSessionArtifacts(ctx.uiConversation, sessionId),
-      // 预览走 session 作用域地址:宿主按该会话自己的工作区根解析 —— 隔离就落在这里。
-      // resources.source() 是快照,值要等加载;取不到就返回 null,节点显示"预览不可用"
-      // 而不是崩掉。pin() 触发加载,下一次渲染就能拿到 URL。
-      resolvePreviewUrl: (path) => {
-        try {
-          const address = sessionFileAddress(sessionId, path)
-          ctx.resources.pin(address, new AbortController().signal)
-          return ctx.resources.source(address).getSnapshot().value?.url ?? null
-        } catch (_error) {
-          return null
-        }
-      },
-    }),
+    // hooks 隔间:渲染器把 `artifacts` 绑成 `useArtifacts`。业务组件不得自带
+    // 订阅机制,而预览 URL 是异步到的 —— 这个隔间就是这两条之间的桥。
+    // inject 必须是**函数** —— 写成对象字面量会在注册时抛
+    // `TypeError: inject is not a function`,而报错只指向 slot 核心,
+    // 症状是"画布主体整个不渲染"(既无网格也无空态)。
+    inject: () => ({ hooks: { artifacts: canvas.source } }),
   }, LandouCanvasBody))
 
   // 工具条徽章走和其它贡献者完全相同的路注册进上面那个座位。
