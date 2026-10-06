@@ -116,6 +116,42 @@ function previewUrlFor(ctx: ClientContext, sessionId: string, path: string): str
   return `${LANDOU_ROUTE_PREFIX}/file?${query}`
 }
 
+/** 画布会话在列表里显示的名字。 */
+const CANVAS_SESSION_TITLE = '新画布会话'
+
+/**
+ * 给会话改名,让它在会话列表那一行显示「新画布会话」。
+ *
+ * 为什么靠改名:列表行的文字由 DSH 的 `displayTitle` 产出,而那不是 slot ——
+ * 插件没有别的办法影响它。DSH 那边已改成"有标题就用标题,空白会话也一样",
+ * 所以在这里写一个标题就能落到那一行上。
+ *
+ * `source` 借 `controllerOperation`:它是 DSH 声明的"一次需要会话引用的客户端操作",
+ * 语义相符。插件声明不了自己的 source —— 那要 declaration merging,而插件不引 DSH 类型。
+ * @param ctx - 插件上下文。
+ * @param sessionId - 要改名的会话。
+ * @returns 改名完成;失败不抛 —— 改不了名不该影响画布本身能用。
+ */
+async function titleCanvasSession(ctx: ClientContext, sessionId: string): Promise<void> {
+  try {
+    const sessions = ctx.get('sessions') as {
+      readonly using?: (
+        id: string,
+        options: { readonly source: string },
+        run: (reference: { readonly binding: { readonly session: { rename: (title: string) => Promise<unknown> } } }) => Promise<unknown>,
+      ) => Promise<unknown>
+    } | undefined
+    if (sessions?.using === undefined) return
+    await sessions.using(
+      sessionId,
+      { source: 'controllerOperation' },
+      (reference) => reference.binding.session.rename(CANVAS_SESSION_TITLE),
+    )
+  } catch (_error) {
+    // 改不了名不影响画布功能,不值得把这次标记也弄失败。
+  }
+}
+
 /** 会被当作文字预览的扩展名。二进制文件也归 `text` 一类(分类的兜底),但不该去读它。 */
 const TEXTUAL_EXTENSIONS = new Set(['md', 'markdown', 'txt', 'json', 'csv', 'tsv', 'log', 'yaml', 'yml', 'toml', 'ini', 'html', 'css', 'js', 'ts', 'tsx', 'jsx', 'py', 'sh', 'rs', 'go', 'java', 'c', 'h', 'cpp'])
 
@@ -351,6 +387,7 @@ export function apply(ctx: ClientContext): void {
         pendingCanvasSession = undefined
         marked.add(session)
         writeCanvasSessions(marked)
+        void titleCanvasSession(ctx, session)
       } else if (pending !== undefined && Date.now() - pending.at > 8000) {
         // 迟迟收不了尾就丢掉,免得一个陈旧待办日后标记一个无关会话。
         pendingCanvasSession = undefined
