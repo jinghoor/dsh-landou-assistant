@@ -79,56 +79,46 @@ const PREVIEW_MIME: Record<string, string> = {
   '.js': 'text/javascript; charset=utf-8', '.ts': 'text/plain; charset=utf-8',
 }
 
-/** 工作区根缓存:根在一次进程生命周期内基本不变。 */
-let rootsCache: { at: number; roots: string[] } | undefined
+/** 工作区表缓存:路径与会话归属在一次进程生命周期内基本不变。 */
+let workspaceCache: { at: number; bySession: Map<string, string> } | undefined
 
-/** 缓存有效期。够短,工作区真的换了也不会长期用旧的。 */
-const ROOTS_TTL_MS = 15_000
+/** 缓存有效期。够短,真的移动了工作区也不会长期用旧的。 */
+const WORKSPACE_TTL_MS = 15_000
 
 /**
- * 本机已登记的工作区根目录。
+ * 会话 → 它的工作区根。
  *
- * 文件路由**只服务这些根下面的文件**。这是路由的授权面:客户端只可能为当前会话的
- * 产物请求字节,而产物路径落在该会话的工作区里 —— 但那是客户端的自律,
- * 不能当授权的依据。真正把范围钉死的是这里:根之外一律 403。
+ * 读 `$DSH_HOME/storages/workspace.json`:每个工作区带 `path` 与 `sessionIds`,
+ * 所以会话归属是从 DSH 自己的记录里查出来的,**不是客户端说了算**。
  *
- * 读不到(没有 storage、格式变了)就返回空集 —— 空集意味着**什么都服务不了**,
- * 这是安全侧的失败方向。
- * @returns 规范化后的绝对根路径列表。
+ * 启动早期这份存储还没落盘,读到空表就等于"什么都不服务" —— 而浏览器对失败过的
+ * `<img>` 不会自己重试,首次失败是粘住的(实测:重启后前几个预览全 403,手工再打
+ * 同一个 URL 立刻 200,页面上却永远空着)。所以空结果**刻意不入缓存**,
+ * 让存储落盘后的下一次请求自己恢复。
+ * @returns 会话 id 到工作区根绝对路径的映射。
  */
-async function workspaceRoots(): Promise<string[]> {
-  // **缓存是必须的,不是优化。** 实测:重启后最初的几个预览请求全部 403 ——
-  // 那时 workspace 存储还没落盘,读到空集就等于"没有可服务的工作区"。
-  // 而浏览器对失败过的 `<img>` 不会自己重试,所以首次失败是**粘住**的:
-  // 手工再打同一个 URL 立刻是 200,页面上却永远空着。
-  // 空集刻意**不入缓存**,这样存储落盘后的下一次请求能自己恢复。
-  if (rootsCache !== undefined && Date.now() - rootsCache.at < ROOTS_TTL_MS) return rootsCache.roots
+async function sessionWorkspaces(): Promise<Map<string, string>> {
+  if (workspaceCache !== undefined && Date.now() - workspaceCache.at < WORKSPACE_TTL_MS) return workspaceCache.bySession
+  const bySession = new Map<string, string>()
   try {
     const raw = await readFile(join(resolveDshHome(), 'storages', 'workspace.json'), 'utf8')
-    const parsed = JSON.parse(raw) as unknown
-    const roots: string[] = []
-    const walk = (value: unknown): void => {
-      if (typeof value === 'string') {
-        if (value.startsWith('/')) roots.push(resolve(value))
-        return
-      }
-      if (Array.isArray(value)) { for (const item of value) walk(item); return }
-      if (value !== null && typeof value === 'object') {
-        for (const item of Object.values(value as Record<string, unknown>)) walk(item)
+    const parsed = JSON.parse(raw) as { tables?: { workspaces?: Record<string, { path?: unknown; sessionIds?: unknown }> } }
+    for (const entry of Object.values(parsed.tables?.workspaces ?? {})) {
+      if (typeof entry.path !== 'string' || !Array.isArray(entry.sessionIds)) continue
+      for (const id of entry.sessionIds) {
+        if (typeof id === 'string') bySession.set(id, resolve(entry.path))
       }
     }
-    walk(parsed)
-    const unique = [...new Set(roots)]
-    if (unique.length > 0) rootsCache = { at: Date.now(), roots: unique }
-    return unique
   } catch (_error) {
-    return []
+    return bySession
   }
+  if (bySession.size > 0) workspaceCache = { at: Date.now(), bySession }
+  return bySession
 }
 
-/** 目标是否落在某个已登记的工作区根之下。 */
-function underAnyRoot(target: string, roots: readonly string[]): boolean {
-  return roots.some((root) => target === root || target.startsWith(root.endsWith(sep) ? root : root + sep))
+/** 目标是否落在根之下。 */
+function underRoot(target: string, root: string): boolean {
+  return target === root || target.startsWith(root.endsWith(sep) ? root : root + sep)
 }
 
 /** 落盘位置。 */
@@ -354,7 +344,7 @@ async function completeAuth<T extends ErpTokenResponse>(res: ServerResponse, res
  */
 export function apply(ctx: Context): void {
   // 启动就预热一次,让第一个预览请求落在已缓存的根上,而不是撞上"存储还没落盘"。
-  void workspaceRoots()
+  void sessionWorkspaces()
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
@@ -369,11 +359,21 @@ export function apply(ctx: Context): void {
       // 所以浏览器侧没有任何内置途径把工作区文件读成图片。官方图片预览是从调用方
       // 拿字节的,那条通道不属于插件。这里补的正是这一段。
       if (method === 'GET' && path === '/file') {
-        const requested = new URL(req.url ?? '/', 'http://localhost').searchParams.get('path')
-        if (requested === null || requested === '') { sendJson(res, 400, { error: 'path 必填' }); return }
+        const query = new URL(req.url ?? '/', 'http://localhost').searchParams
+        const requested = query.get('path')
+        const sessionId = query.get('session')
+        if (requested === null || requested === '' || sessionId === null || sessionId === '') {
+          sendJson(res, 400, { error: 'path 与 session 都必填' })
+          return
+        }
+        // **按会话授权,不是按"任意已登记工作区"。** 根从 DSH 自己的 workspace 记录里
+        // 查出来,客户端只负责说"我在哪个会话里",说不了"我可以读哪里"。
+        // 认不出这个会话就拒绝 —— 拒绝是安全侧的失败方向,而产物只会在 agent 跑过之后
+        // 才存在,那时会话已经记进 workspace.json 了。
+        const root = (await sessionWorkspaces()).get(sessionId)
+        if (root === undefined) { sendJson(res, 403, { error: '会话不属于任何已登记工作区' }); return }
         const target = resolve(requested)
-        const roots = await workspaceRoots()
-        if (!underAnyRoot(target, roots)) { sendJson(res, 403, { error: '不在任何已登记的工作区内' }); return }
+        if (!underRoot(target, root)) { sendJson(res, 403, { error: '不在该会话的工作区内' }); return }
         let info
         try {
           info = await stat(target)

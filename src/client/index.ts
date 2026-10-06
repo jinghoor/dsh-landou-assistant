@@ -109,7 +109,10 @@ export const inject = ['slots', 'locale', 'uiConversation', 'resources', 'layout
 function previewUrlFor(ctx: ClientContext, sessionId: string, path: string): string {
   // 同源相对路径:Electron 把 `dsh-app://app` 下除静态资源外的任意路径原样转发给宿主,
   // Web 载体下客户端本来就在宿主源上,两边都成立、都不经 CORS。
-  return `${LANDOU_ROUTE_PREFIX}/file?path=${encodeURIComponent(absoluteArtifactPath(ctx, sessionId, path))}`
+  // 带上 session:宿主据此**从自己的 workspace 记录里**解析该会话的工作区根,
+  // 而不是接受客户端声称的任何位置。客户端只能说"我在哪个会话里"。
+  const query = `path=${encodeURIComponent(absoluteArtifactPath(ctx, sessionId, path))}&session=${encodeURIComponent(sessionId)}`
+  return `${LANDOU_ROUTE_PREFIX}/file?${query}`
 }
 
 /** 会被当作文字预览的扩展名。二进制文件也归 `text` 一类(分类的兜底),但不该去读它。 */
