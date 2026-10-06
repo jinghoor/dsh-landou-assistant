@@ -25,6 +25,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { LandouBrandName } from './LandouBrandName.tsx'
 import { LandouCanvasBadge } from './LandouCanvasBadge.tsx'
+import { CanvasSessionBadge } from './CanvasSessionBadge.tsx'
 import { LandouCanvasBody } from './LandouCanvasBody.tsx'
 import { readSessionArtifacts } from './canvas-artifacts.ts'
 import { createCanvasSource } from './canvas-store.ts'
@@ -455,6 +456,20 @@ export function apply(ctx: ClientContext): void {
       },
     }),
   }, LandouNewSessionAction))
+
+  // ── 画布会话的标志 ────────────────────────────────────────────────
+  // 挂在输入框那一列(模型/agent 选择器旁边)—— 会话列表里两种会话长得一样,
+  // 用户需要一眼知道自己在哪种里。**普通会话返回 null**,不给它一个"非画布"的标记,
+  // 那只会让两种会话都多一个噪音。
+  ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
+    name: 'conversation.composer.dock',
+    id: 'canvas-session-badge',
+    order: 10,
+    locale: NS,
+    inject: (sessionId: string) => ({
+      isCanvasSession: sessionId !== undefined && readCanvasSessions().has(sessionId),
+    }),
+  }, CanvasSessionBadge))
 
   // ── 画布主体 ──────────────────────────────────────────────────────
   // inject 闭包拿到的 ctx 与 entry 的 sessionId;主体据此读产物、算预览地址。
