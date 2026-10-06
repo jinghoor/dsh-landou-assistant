@@ -18,6 +18,7 @@
  * | 文字 | 其余一切(兜底) | 文件名 + 扩展名标记 |
  */
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
+import { useState } from 'react'
 import type { Artifact } from './artifacts.ts'
 import type { CanvasNode } from './canvas-store.ts'
 import { LandouMark } from './LandouMark.tsx'
@@ -169,6 +170,7 @@ function NodeOpenButton({ artifact, url, onOpen, align = 'stretch' }: {
  * @returns 文字卡片。
  */
 function TextNode({ artifact, preview, url, onOpen }: { artifact: Artifact; preview?: string | null; url: string; onOpen: LandouCanvasBodyProps['openArtifact'] }) {
+  const [expanded, setExpanded] = useState(false)
   const hasBody = typeof preview === 'string' && preview.trim() !== ''
   return (
     <div style={{ ...NODE_STYLE, padding: 10, gap: 8 }} data-landou-node="text" data-landou-path={artifact.path} title={artifact.path}>
@@ -182,7 +184,20 @@ function TextNode({ artifact, preview, url, onOpen }: { artifact: Artifact; prev
         <NodeOpenButton artifact={artifact} url={url} onOpen={onOpen} align="start" />
       </div>
       {hasBody
-        ? <pre style={{ margin: 0, fontSize: 11, lineHeight: 1.5, opacity: 0.8, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 132, overflow: 'hidden', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{preview}</pre>
+        ? (
+          /* 就地展开而不是去打开右侧文档面板。**画布面板没有挂载那个面板的会话面** ——
+             实测调用 `sidebarRight.openResource` 直接抛 "no session surface is mounted",
+             所以那条路在这里不可能成功。展开是同一意图下**一定生效**的做法。 */
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => { setExpanded((value) => !value) }}
+            onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setExpanded((value) => !value) } }}
+            style={{ cursor: 'pointer' }}
+          >
+            <pre style={{ margin: 0, fontSize: 11, lineHeight: 1.5, opacity: 0.8, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: expanded ? 'none' : 132, overflow: 'hidden', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{preview}</pre>
+          </div>
+        )
         : <span style={{ fontSize: 11, opacity: 0.45, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', direction: 'rtl', textAlign: 'left' }}>{artifact.path}</span>}
     </div>
   )
