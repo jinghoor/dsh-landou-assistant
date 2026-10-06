@@ -52,14 +52,45 @@ const LANDOU_SECTION_ID = 'landou-assistant'
  */
 const CANVAS_PANEL_ID = 'landou-canvas'
 
+/**
+ * 哪些会话是画布会话。
+ *
+ * 存 localStorage 而不是内存:重载后要能回到画布布局,否则每次刷新都掉回普通对话。
+ * DSH 的会话实体里没有"种类"这个字段(实测),所以这个映射只能由本插件持有 ——
+ * 它是本插件对自己会话的标注,不是 DSH 的数据。
+ */
+const CANVAS_SESSIONS_KEY = 'dsh-landou.canvasSessions'
+
+/** 读回画布会话集合;内容损坏时返回空集而不是抛错。 */
+function readCanvasSessions(): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(CANVAS_SESSIONS_KEY)
+    const parsed = raw === null ? [] : JSON.parse(raw)
+    return new Set(Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [])
+  } catch (_error) {
+    return new Set()
+  }
+}
+
+/** 写回画布会话集合。 */
+function writeCanvasSessions(ids: Set<string>): void {
+  try {
+    window.localStorage.setItem(CANVAS_SESSIONS_KEY, JSON.stringify([...ids]))
+  } catch (_error) {
+    // 存不下就退化成"这次有效、重载后失效",不该让插件起不来。
+  }
+}
+
 /** 必需服务:UI slot 注册表 + 本地化字典。 */
-export const inject = ['slots', 'locale', 'uiConversation', 'resources', 'layout', 'uiWorkspace']
+export const inject = ['slots', 'locale', 'uiConversation', 'resources', 'layout', 'uiWorkspace', 'uiSession']
 
 /**
  * 注册本插件的全部浏览器贡献。
  * @param ctx - 浏览器根上下文。
  */
 export function apply(ctx: ClientContext): void {
+  /** 「画布会话」被点过、但新会话还没落地 —— 落地时把它记成画布会话。 */
+  let pendingCanvasSession = false
   const t = ctx.locale.bind(NS)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'landou-assistant: dictionaries')
 
@@ -142,17 +173,54 @@ export function apply(ctx: ClientContext): void {
         // 路径上调用不生效(不报错,只是什么都没发生),症状极难查。
         const workspace = ctx.get('uiWorkspace')
         if (workspace === undefined) throw new Error('landou: uiWorkspace 服务不可用')
+        // 只标一个待办:**当前会话一换,下面的观察器就把它记成画布会话并切布局**。
+        //
+        // 之前这里是"startSession() 之后延后 500ms 再 selectPanel"。那是在绕开一个
+        // 真实约束(LayoutController.selectPanel 第一件事是 navigation.abort(),
+        // 会中止挂起中的会话创建导航),但绕法靠的是猜一个延时。现在改成状态驱动:
+        // 谁都不用等谁,也就不存在顺序问题。
+        pendingCanvasSession = true
         workspace.startSession()
-        // 切面板必须**等会话导航落定**再发。LayoutController.selectPanel 第一件事是
-        // `this.navigation.abort()` —— 它会中止挂起中的导航,而 startSession 的会话
-        // 创建正是异步挂起的导航。放在它前面会把创建吃掉(面板切了、会话没建),
-        // 放在它后面则会被会话导航把面板重置回对话。都不是猜的,是读 selectPanel
-        // 与 startSession 的实现得到的。
-        const layout = ctx.get('layout')
-        setTimeout(() => { layout?.selectPanel(CANVAS_PANEL_ID) }, 500)
       },
     }),
   }, LandouNewSessionAction))
+
+  // ── 画布会话的布局跟随 ────────────────────────────────────────────
+  // 当前会话一换就决定用哪个布局:是画布会话就切到画布面板,不是就切回对话。
+  // 这让"画布会话"成为**会话自身的属性**,而不是一次性的界面动作 ——
+  // 重载、从会话列表点回来、切到别的会话,行为都一致。
+  //
+  // 用轮询而不是订阅:`uiSession.mainRetainId` 是个普通字符串字段,不是可观察量
+  // (实测;`uiSession.current` 那个可观察量给的是绑定源,不含会话 id)。
+  // 400ms 的代价可以忽略,而它换来的是"不用去猜一个订阅接口"。
+  ctx.effect(() => {
+    let lastSession = ''
+    const timer = window.setInterval(() => {
+      const session = (ctx.get('uiSession') as { readonly mainRetainId?: string } | undefined)?.mainRetainId
+      if (session === undefined) return
+      const changed = session !== lastSession
+      lastSession = session
+      // 待办也要触发,不能只在 id 变了才跑:DSH **复用空白会话**,点「画布会话」
+      // 时 mainRetainId 往往根本没变(实测)。只认"id 变了"的话这个待办永远不会兑现,
+      // 症状是"菜单点了没反应",而代码看起来完全正确。
+      if (!changed && !pendingCanvasSession) return
+      const marked = readCanvasSessions()
+      if (pendingCanvasSession) {
+        pendingCanvasSession = false
+        marked.add(session)
+        writeCanvasSessions(marked)
+      }
+      const layout = ctx.get('layout')
+      if (layout === undefined) return
+      if (marked.has(session)) {
+        if (layout.panelInfo.getSnapshot().activePanelId !== CANVAS_PANEL_ID) layout.selectPanel(CANVAS_PANEL_ID)
+      } else if (layout.panelInfo.getSnapshot().activePanelId === CANVAS_PANEL_ID) {
+        // 切回普通会话时把布局还回去,否则会停在一个不属于它的画布上。
+        layout.selectPanel(null)
+      }
+    }, 400)
+    return () => { window.clearInterval(timer) }
+  }, 'landou: canvas session layout follows the session')
 
   // ── 画布主体 ──────────────────────────────────────────────────────
   // inject 闭包拿到的 ctx 与 entry 的 sessionId;主体据此读产物、算预览地址。
