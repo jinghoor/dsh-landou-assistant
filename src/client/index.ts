@@ -199,8 +199,19 @@ function absoluteArtifactPath(ctx: ClientContext, sessionId: string, path: strin
 
 
 export function apply(ctx: ClientContext): void {
-  /** 「画布会话」被点过、但新会话还没落地 —— 落地时把它记成画布会话。 */
-  let pendingCanvasSession = false
+  /**
+   * 「画布会话」被点过、但目标会话还没确定。
+   *
+   * **不是布尔标志。** 布尔标志会被"下一个出现的当前会话"消费 —— 而切换快过一次
+   * 轮询时,那可能不是用户点的那一个。实测踩过:连着点两次后,标记落到了上一个会话上,
+   * 当前会话反而没被标记,画布面板也就没切过去。
+   *
+   * 记录点击那一刻的会话与时间,收尾时按这两种情形判定:
+   * - `startSession()` 真的开了新会话 → 当前会话与那时不同,记新的那个;
+   * - **DSH 复用了空白会话**(实测常态,id 根本不变)→ 等一小会儿仍是同一个,就记它。
+   * 超时未收尾就丢弃,免得一个陈旧的待办在几分钟后标记一个无关会话。
+   */
+  let pendingCanvasSession: { readonly before: string; readonly at: number } | undefined
   /** 画布产物的响应式来源;下面那个轮询负责刷新它,画布主体通过 hooks 隔间消费。 */
   const canvas = createCanvasSource()
   const t = ctx.locale.bind(NS)
@@ -291,7 +302,10 @@ export function apply(ctx: ClientContext): void {
         // 真实约束(LayoutController.selectPanel 第一件事是 navigation.abort(),
         // 会中止挂起中的会话创建导航),但绕法靠的是猜一个延时。现在改成状态驱动:
         // 谁都不用等谁,也就不存在顺序问题。
-        pendingCanvasSession = true
+        pendingCanvasSession = {
+          before: (ctx.get('uiSession') as { readonly mainRetainId?: string } | undefined)?.mainRetainId ?? '',
+          at: Date.now(),
+        }
         workspace.startSession()
       },
     }),
@@ -331,15 +345,22 @@ export function apply(ctx: ClientContext): void {
       if (session === undefined) return
       const changed = session !== lastSession
       lastSession = session
-      // 待办也要触发,不能只在 id 变了才跑:DSH **复用空白会话**,点「画布会话」
-      // 时 mainRetainId 往往根本没变(实测)。只认"id 变了"的话这个待办永远不会兑现,
-      // 症状是"菜单点了没反应",而代码看起来完全正确。
-      if (!changed && !pendingCanvasSession) return
+      // **每次轮询都要做决定,不能只在会话变化时做。** 早先这里是边沿触发
+      // (只在 id 变了才评估),后果是:人已经待在某个会话里、标记之后才写入时,
+      // 布局永远不会被重新评估 —— 实测症状是"标记写进去了,面板没切"。
+      // 电平触发(每次都算一遍期望布局,和现状不符就纠正)同时覆盖了会话切换、
+      // 重载恢复、以及标记后到这三种情形,不需要各自的特例。
+      const pending = pendingCanvasSession
+      // 已经有新会话了 → 立刻收尾;还没变的话等一小会儿再收,给复用那条路留出判定时间。
+      const settled = pending !== undefined && (changed || Date.now() - pending.at > 1200)
       const marked = readCanvasSessions()
-      if (pendingCanvasSession) {
-        pendingCanvasSession = false
+      if (pending !== undefined && settled) {
+        pendingCanvasSession = undefined
         marked.add(session)
         writeCanvasSessions(marked)
+      } else if (pending !== undefined && Date.now() - pending.at > 8000) {
+        // 迟迟收不了尾就丢掉,免得一个陈旧待办日后标记一个无关会话。
+        pendingCanvasSession = undefined
       }
       const layout = ctx.get('layout')
       if (layout === undefined) return
