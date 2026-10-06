@@ -205,10 +205,21 @@ function openArtifact(ctx: ClientContext, sessionId: string, path: string, url: 
   } catch (_error) {
     // 落下去用兜底,不要在这里吞掉用户的点击。
   }
+  // **兜底用 `<a target="_blank">` 的程序化点击,不用 `window.open`。**
+  // `window.open` 会被弹窗拦截器吞掉(实测:点了毫无反应,而 `openResource` 抛的
+  // "no session surface is mounted" 被 catch 吃掉,于是两条路都无声失败)。
+  // 锚点点击走的是导航而不是弹窗,不受同一套拦截。
   try {
-    window.open(url, '_blank', 'noopener,noreferrer')
+    const link = document.createElement('a')
+    link.href = url
+    link.target = '_blank'
+    link.rel = 'noopener noreferrer'
+    document.body.append(link)
+    link.click()
+    link.remove()
   } catch (_error) {
-    // 弹窗被拦也就算了:节点本来的作用是把产物显示出来,那件事已经做完了。
+    // 走到这里说明连导航都发不出去。节点本来的作用是把产物显示出来,那件事已经做完了,
+    // 所以这里不再往上抛 —— 但也不假装成功。
   }
 }
 
