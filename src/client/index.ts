@@ -24,12 +24,21 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { LandouBrandName } from './LandouBrandName.tsx'
+import { LandouLauncherItem } from './LandouLauncherItem.tsx'
 import { LandouSettingsSection } from './LandouSettingsSection.tsx'
 import { en, zh } from './locales.ts'
 import { getSession, login, logout, register, sendEmailCode } from './session.ts'
 
 /** 本插件拥有的文案命名空间。 */
 const NS = 'landou-assistant'
+
+/**
+ * 本插件在设置里的分区键。
+ *
+ * 菜单入口与设置分区两处注册共用同一个值:菜单行要指向分区,分区要用它做 id,
+ * 两边写死字符串迟早会改一处漏一处,那样菜单点了会落到"没有这个分区"。
+ */
+const LANDOU_SECTION_ID = 'landou-assistant'
 
 /** 必需服务:UI slot 注册表 + 本地化字典。 */
 export const inject = ['slots', 'locale']
@@ -53,6 +62,21 @@ export function apply(ctx: ClientContext): void {
     yield ctx.slots.register({ name: 'sidebar.brand.name', priority: -1 }, LandouBrandName)
   })
 
+  // ── 账号菜单顶部的入口 ────────────────────────────────────────────
+  // 菜单行原本是硬编码的(设置/意见反馈/退出登录),没有扩展点;这个 slot 由
+  // 账号菜单的占位者声明。**未经修改的 DSH 不声明它** —— `slots.inject` 会
+  // 一直等,既不报错也不插入,所以本插件在旧 DSH 上照样干净加载,只是少这一行。
+  //
+  // order 取负值:菜单里的贡献行按 order 排,排在其它贡献者前面。
+  // id 是**列表 slot 的必需项** —— slot 核心用它给列表项排序去重,漏了会在
+  // 注册那一刻抛 `list slot ... requires options.id`,而且会中断整个 bundle 的 apply。
+  ctx.slots.inject('settings.launcher.menu.item', () => ctx.slots.register({
+    name: 'settings.launcher.menu.item',
+    id: LANDOU_SECTION_ID,
+    order: -100,
+    locale: NS,
+  }, LandouLauncherItem))
+
   // ── 设置页导航项 ──────────────────────────────────────────────────
   // `settings.section` 是列表 slot,导航身份由注册选项给出:
   //   id    —— 分区键,也是 shell 选图标时的匹配键
@@ -62,7 +86,7 @@ export function apply(ctx: ClientContext): void {
   // shell 没有自己的文案,全部来自注册方。
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
-    id: 'landou-assistant',
+    id: LANDOU_SECTION_ID,
     order: 30,
     label: () => t('nav'),
     locale: NS,

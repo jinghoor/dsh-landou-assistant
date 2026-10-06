@@ -96,21 +96,22 @@ ERP 侧契约取自 `https://dmaierp.com/openapi.json`,请求一律带
 - 环境变量 `LANDOU_API_BASE_URL`(或 `ERP_API_BASE_URL`)可指向测试部署,
   默认 `https://dmaierp.com/api`。
 
-### 登录门控怎么实现的
+### 登录门控落在哪
 
-侧栏品牌位的注册**只在已登录时存在**:
+**登录只约束设置页里的账号能力,不约束任何入口。**
 
-```ts
-// 未登录时 brandDisposer 为 undefined,这个占用根本不存在
-brandDisposer = ctx.slots.inject('sidebar.brand.name', function* () {
-  yield ctx.slots.register({ name: 'sidebar.brand.name', priority: -1 }, LandouBrandName)
-})
-```
+曾经把品牌位的注册绑在登录状态上 —— 未登录时那个占用根本不存在,后果是用户
+完全看不到插件装过,被当成了故障。品牌是一个插件的**存在标识**,不是受登录约束的功能。
 
-`slots.inject` 返回 disposer,所以登出时能真正撤掉占用 ——
-**官方品牌插件从未被禁用**,我们的注册消失后它自然重新成为唯一占用者。
+所以三处界面全部无条件注册:
 
-设置页那一项**不受登录状态约束**:未登录的用户必须能在这里找到登录入口。
+| 界面 | slot | 是否受登录约束 |
+|---|---|---|
+| 侧栏品牌名 | `sidebar.brand.name`(`priority: -1` 遮蔽官方) | 否 |
+| 账号菜单顶部入口 | `settings.launcher.menu.item` | 否 |
+| 设置页 | `settings.section` | 否 —— 未登录的人必须能在这里找到登录框 |
+
+需要账号的**动作**(拉取 ERP 数据等)才在设置页内部判登录态。
 
 ---
 
@@ -246,6 +247,29 @@ git add lib && git commit -m "build: ..."
 
 所以本插件用 `priority: -1` 压过官方品牌名 —— 官方插件不报错、也无需禁用它。
 只想换名字不想换图标,所以 `brand.mark` 完全不碰。
+
+### 账号菜单入口 —— `settings.launcher.menu.item` 列表 slot
+
+左下角头像点开的那三项(设置 / 意见反馈 / 退出登录)原本是**硬编码**在
+`ui-settings-account` 里的,插件没有扩展点。本插件在它顶部加了一行「蓝豆助手」,
+点它直接落到设置里的蓝豆助手分区。
+
+```ts
+ctx.slots.inject('settings.launcher.menu.item', () => ctx.slots.register({
+  name: 'settings.launcher.menu.item',
+  id: LANDOU_SECTION_ID,      // 列表 slot 的必需项,漏了会在注册时抛错
+  order: -100,
+  locale: NS,
+}, LandouLauncherItem))
+```
+
+行本身走官方的 `MenuItemButton`,与数据行共用同一套标记,因此自动进入菜单的
+键盘遍历与选中后的焦点归还 —— 自己写 `<button>` 会掉出这两条。
+
+**这一行依赖 DSH 侧的一个扩展点。** 上游目前没有它时,`context` 里的
+`slots.inject` 会一直等,既不报错也不插入 —— 插件照样干净加载,只是少这一行。
+需要在 DSH 侧补 `settings.launcher.menu.item` 并让 shell 把 `openSection` 传给
+launcher 的注册方。**在未经修改的 DSH 上,这一行不会出现,这不是本插件的故障。**
 
 ### 设置页 —— `settings.section` 列表 slot
 
