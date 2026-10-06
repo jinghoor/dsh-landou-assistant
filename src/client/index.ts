@@ -420,7 +420,10 @@ export function apply(ctx: ClientContext): void {
     // inject 必须是**函数** —— 写成对象字面量会在注册时抛
     // `TypeError: inject is not a function`,而报错只指向 slot 核心,
     // 症状是"画布主体整个不渲染"(既无网格也无空态)。
-    inject: () => ({
+    // **参数不能省。** 写成 `() => ({...})` 时 `sessionId` 不在作用域里,报
+    // `ReferenceError: sessionId is not defined` —— 而报错指的是 openArtifact,
+    // 不是 inject,所以看起来像打开功能坏了,实际是签名少了一个参数。
+    inject: (sessionId: string) => ({
       hooks: { artifacts: canvas.source },
       // 注册处注入而不是让组件自己取 ctx:业务组件看不到 ctx,这是 DSH 的硬规矩。
       openArtifact: (path: string, url: string) => { openArtifact(ctx, sessionId, path, url) },
